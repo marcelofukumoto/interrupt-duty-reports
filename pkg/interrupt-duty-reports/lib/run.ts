@@ -182,10 +182,6 @@ export async function startRun(credentials: Credentials, startedBy?: string): Pr
       20000,
     );
 
-    // meta.json travels with the run so publish.sh can finish it without being told the date,
-    // who started it, or when.
-    await podWriteFile(target, `${ runDir }/meta.json`, JSON.stringify(meta), { mode: '644', owner: POD_USER });
-
     // 0600 and owned by the pane's user: read once by the gather, removed by publish.sh.
     await podWriteFile(
       target,
@@ -200,6 +196,14 @@ export async function startRun(credentials: Credentials, startedBy?: string): Pr
       openingPrompt(runDir, id, date),
     );
 
+    // After the conversation exists, not before. meta.json travels with the run so that
+    // publish.sh can finish it without being told the date or who started it - and publish.sh
+    // writes that copy back over the summary, so anything missing from it here is a field the
+    // finished report does not have. Writing it first dropped the session id from every report
+    // the moment it completed.
+    const withSession = { ...meta, session };
+
+    await podWriteFile(target, `${ runDir }/meta.json`, JSON.stringify(withSession), { mode: '644', owner: POD_USER });
     await updateMeta(id, (current) => ({ ...current, session }));
 
     // Start the pane detached. Starting a conversation only queues the prompt - it is read the
@@ -334,51 +338,37 @@ export async function sweepRunDirectories(keepIds: string[]): Promise<void> {
  */
 export type RunPhase = 'starting' | 'gathering' | 'analysing' | 'publishing';
 
-export interface RunProgress {
-  phase: RunPhase;
-  /** The pane's last few lines, kept as detail somebody can open rather than as the headline. */
-  output: string;
-}
-
 export const RUN_PHASES: RunPhase[] = ['starting', 'gathering', 'analysing', 'publishing'];
 
-export async function runProgress(meta: ReportMeta, lines = 12): Promise<RunProgress> {
+/**
+ * One directory listing, four times a minute.
+ *
+ * It used to read the terminal as well and show its last few lines under the steps. That is
+ * gone: the whole session can be opened now, live and interactive, which is strictly better
+ * than six lines of scrollback - and dropping it halves the work a poll does.
+ */
+export async function runPhase(meta: ReportMeta): Promise<RunPhase> {
   const api = agentsApi();
+  const pod = api && meta.session ? await api.agent.pod().catch(() => null) : null;
 
-  if (!api || !meta.session) {
-    return { phase: 'starting', output: '' };
+  if (!pod) {
+    return 'starting';
   }
 
-  const pod = await api.agent.pod().catch(() => null);
-
-  // Asked together: one of these is a directory listing and the other is a terminal capture,
-  // and a person is watching both change.
-  const [listing, pane] = await Promise.all([
-    pod
-      ? podExec(
-        agentTarget(pod),
-        ['/bin/sh', '-c', `ls -1 ${ shellQuote(`${ ROOT }/${ meta.id }`) } 2>/dev/null`],
-        { timeoutMs: 15000 },
-      ).catch(() => null)
-      : Promise.resolve(null),
-    api.agent.pane(meta.session, lines).catch(() => null),
-  ]);
+  const listing = await podExec(
+    agentTarget(pod),
+    ['/bin/sh', '-c', `ls -1 ${ shellQuote(`${ ROOT }/${ meta.id }`) } 2>/dev/null`],
+    { timeoutMs: 15000 },
+  ).catch(() => null);
 
   const files = new Set((listing?.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean));
 
-  let phase: RunPhase = 'starting';
-
   if (files.has('report.json')) {
-    phase = 'publishing';
-  } else if (files.has('data.json')) {
-    phase = 'analysing';
-  } else if (files.has('meta.json')) {
-    phase = 'gathering';
+    return 'publishing';
+  }
+  if (files.has('data.json')) {
+    return 'analysing';
   }
 
-  const output = pane?.running
-    ? pane.text.split('\n').map((l) => l.trim()).filter(Boolean).slice(-6).join('\n')
-    : '';
-
-  return { phase, output };
+  return files.has('meta.json') ? 'gathering' : 'starting';
 }

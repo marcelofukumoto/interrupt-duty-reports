@@ -47,6 +47,24 @@ export function agentsApi(): AgentsApi | null {
   return (window as unknown as Record<string, AgentsApi | undefined>)[AGENTS_GLOBAL] || null;
 }
 
+/**
+ * The agents extension's terminal, as a component to mount.
+ *
+ * This is the whole of what "show me the session" needs: the same xterm, the same exec socket,
+ * the same tmux reattach and the same chat/terminal toggle the drawer uses, given a `session`
+ * prop. Nothing is imported - two extensions are two bundles, and the component travels on
+ * `window` - but both run on the dashboard's own Vue, which is what makes mounting another
+ * bundle's component work at all.
+ *
+ * It is deliberately not the drawer. The drawer lists only `agent-<n>`; a project's
+ * conversations - which is what every run here is - are excluded from it by design, so that a
+ * workspace's chatter never fills the global strip. Placing the pane is the offered way in, and
+ * the agents README says so outright.
+ */
+export function terminalComponent(): unknown | null {
+  return agentsApi()?.terminal?.component || null;
+}
+
 /** Compare two dotted versions numerically - `0.1.9` is not later than `0.1.40`. */
 function atLeast(version: string, minimum: string): boolean {
   const left = String(version || '').split('.').map((p) => parseInt(p, 10) || 0);

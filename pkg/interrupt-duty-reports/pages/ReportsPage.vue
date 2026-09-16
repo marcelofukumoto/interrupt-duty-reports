@@ -17,6 +17,7 @@ import { Banner } from '@components/Banner';
 import ButtonGroup from '@shell/components/ButtonGroup';
 import CalendarGrid from '../components/CalendarGrid.vue';
 import CredentialsDialog from '../components/CredentialsDialog.vue';
+import AgentSessionPanel from '../components/AgentSessionPanel.vue';
 import ReportPanel from '../components/ReportPanel.vue';
 import ReportRow from '../components/ReportRow.vue';
 import RunProgress from '../components/RunProgress.vue';
@@ -27,9 +28,9 @@ import {
   deleteReport, listReports, MAX_REPORTS, pruneToCap, setStatus,
 } from '../lib/store';
 import {
-  runProgress, startRun, stopRun, sweepFinishedRuns, sweepRunDirectories,
+  runPhase, startRun, stopRun, sweepFinishedRuns, sweepRunDirectories,
 } from '../lib/run';
-import type { RunProgress as Progress } from '../lib/run';
+import type { RunPhase } from '../lib/run';
 import {
   actNowTrend, DAY_GROUP_ORDER, dayGroup, elapsedLabel, isStale, searchText,
 } from '../lib/format';
@@ -49,7 +50,15 @@ const error = ref('');
 const askingForTokens = ref(false);
 const starting = ref(false);
 const stopping = ref(false);
-const progress = ref<Progress | null>(null);
+const phase = ref<RunPhase>('starting');
+/**
+ * The conversation whose terminal is open in this tab, if any.
+ *
+ * Held so the sweep leaves it alone. A run's conversation is ended the moment the run stops
+ * being in flight, and doing that while somebody is reading the transcript would take it off
+ * the screen mid-sentence.
+ */
+const watchedSession = ref<string | null>(null);
 const query = ref('');
 const searchBox = ref<HTMLInputElement | null>(null);
 /** The tab's memory of the two tokens, so a second report in one sitting is one click. */
@@ -80,6 +89,20 @@ const VIEW_OPTIONS = [
 
 const POLL_RUNNING_MS = 4000;
 const POLL_IDLE_MS = 45000;
+
+/**
+ * How long a finished run's conversation is left alive.
+ *
+ * A run's conversation used to end the moment the run did, which made "watch the agent" useless
+ * the instant it became interesting - the transcript went the second there was something to read
+ * in it. Keeping it for a while is the point of being able to open it at all.
+ *
+ * Time rather than "is somebody looking at it", because looking at it is per-tab: another open
+ * tab of this page runs its own loop, knows nothing about this one's open panel, and would sweep
+ * the session out from under it. Anything derived from one tab's state is a rule the other tabs
+ * do not follow.
+ */
+const SESSION_GRACE_MS = 30 * 60 * 1000;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let stopped = false;
 /**
@@ -184,9 +207,24 @@ async function refresh() {
  * failing to answer it is not something to put a red banner over a month that is otherwise fine.
  */
 async function sweep() {
-  const running = reports.value.filter((r) => r.status === 'running');
+  const now = Date.now();
+  const keep = reports.value
+    .filter((report) => {
+      if (report.status === 'running') {
+        return true;
+      }
 
-  await sweepFinishedRuns(running.map((r) => r.session || '')).catch(() => undefined);
+      const finished = Date.parse(report.finishedAt || '');
+
+      return !Number.isNaN(finished) && now - finished < SESSION_GRACE_MS;
+    })
+    .map((report) => report.session || '');
+
+  // This tab's open panel as well, so a conversation being read past the grace window is not
+  // closed mid-sentence by this tab at least.
+  keep.push(watchedSession.value || '');
+
+  await sweepFinishedRuns(keep).catch(() => undefined);
   await sweepRunDirectories(reports.value.map((r) => r.id)).catch(() => undefined);
 }
 
@@ -209,14 +247,14 @@ function schedule() {
       // publish an outcome - so the page is what finally says the run is not coming back.
       if (isStale(run)) {
         await setStatus(run.id, 'failed', 'The run stopped reporting — the agent pod was probably restarted. Generate it again.').catch(() => undefined);
-        progress.value = null;
+        phase.value = 'starting';
         await refresh();
       } else {
-        progress.value = await runProgress(run).catch(() => null);
+        phase.value = await runPhase(run).catch(() => 'starting');
       }
     } else if (previousRun) {
       // The tick on which a run stopped being in flight is the moment to clear up after it.
-      progress.value = null;
+      phase.value = 'starting';
       await sweep();
     }
 
@@ -317,7 +355,7 @@ async function stop() {
 
   try {
     await stopRun(run);
-    progress.value = null;
+    phase.value = 'starting';
     previousRun = null;
     await refresh();
     await sweep();
@@ -345,6 +383,22 @@ async function remove(meta: ReportMeta) {
   }
 }
 
+/**
+ * Open the run's conversation, as the agents extension's own terminal.
+ *
+ * Not its drawer: that lists `agent-<n>` only, and every run here is a project conversation,
+ * which it excludes by design so a workspace's chatter never fills the global strip. Placing the
+ * pane is the way in that extension offers instead - so the pane is placed here.
+ */
+function watchSession(meta: ReportMeta) {
+  watchedSession.value = meta.session || null;
+
+  store.commit('slideInPanel/open', {
+    component:      AgentSessionPanel,
+    componentProps: { width: 'wide', meta },
+  });
+}
+
 function open(meta: ReportMeta) {
   const previous = previousComplete.value.get(meta.id);
 
@@ -360,6 +414,7 @@ function open(meta: ReportMeta) {
       previousId:   previous?.id,
       previousDate: previous?.reportDate,
       onDelete:     remove,
+      onWatch:      watchSession,
     },
   });
 }
@@ -428,9 +483,10 @@ function open(meta: ReportMeta) {
         <span>{{ elapsedLabel(activeRun) }}</span>
       </div>
       <RunProgress
-        :phase="progress?.phase || 'starting'"
-        :output="progress?.output || ''"
+        :phase="phase"
         :elapsed="elapsedLabel(activeRun)"
+        :can-open-session="!!activeRun.session"
+        @open-session="watchSession(activeRun)"
       />
     </section>
 

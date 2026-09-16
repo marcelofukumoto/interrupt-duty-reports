@@ -13,6 +13,10 @@ copy and send.
   data, analyses it against the report specification, and publishes the result. While it runs,
   the row shows which of the four steps it is on — read from the files the run has produced, not
   guessed from the terminal.
+- **Watch the agent** — opens the run's conversation as a live terminal: the Agents extension's
+  own pane, so it is the real session, interactive, and you can ask it questions. It stays
+  openable for 30 minutes after a run finishes, which is when the transcript is most worth
+  reading — the agent explains the judgment calls the report itself does not carry.
 - **Stop** — ends the run in flight.
 - **Delete** — on each row in the list view, and inside the report in both views. A calendar
   square is a hundred pixels wide with no room for a button and its confirmation, so there the
@@ -150,6 +154,20 @@ your name on it. So instead:
 Everything deterministic is a script; everything judged is the prompt. The agent's job starts
 at `data.json` and stops at `report.json` — neither end of it is left to the agent to
 improvise, and `publish.sh` refuses to publish a `report.json` that is not a valid report.
+
+### Watching the agent
+
+The pane is the Agents extension's own `window.__agents.terminal.component`, mounted here rather
+than reached through its drawer — that drawer lists only `agent-<n>`, and every run here is a
+*project* conversation, which it excludes by design so a workspace's chatter never fills the
+global strip. Placing the pane where it is wanted is the integration that extension offers, and
+it is the same xterm, exec socket and tmux reattach either way.
+
+Conversations are swept 30 minutes after their run ends, rather than the instant it ends. The
+window is a **time**, not "is somebody looking at it", because looking at it is per-tab: another
+open tab of this page runs its own loop, knows nothing about this one's open panel, and would
+end the session out from under it. Anything derived from one tab's state is a rule the other
+tabs do not follow.
 
 ## The report specification
 

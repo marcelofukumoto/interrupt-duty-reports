@@ -2,22 +2,25 @@
 // What a run is doing, while it does it.
 //
 // The four steps are read off the files the run has produced, not off the terminal, so this
-// says where the run actually is rather than what claude last printed. The pane's output is
-// still there - a run that stalls is a run somebody will want to look inside - but it is behind
-// a disclosure rather than being the headline, because raw scrollback is the least readable
-// thing on the page and it was the first thing the eye landed on.
-import { computed, ref } from 'vue';
+// says where the run actually is rather than what claude last printed.
+//
+// For the times when the steps are not enough - a run that has stalled, or curiosity about how
+// it reached a recommendation - there is the session itself, live and interactive. That replaced
+// a disclosure showing the last few lines of scrollback: six lines of terminal was the least
+// readable thing on the page, and the whole conversation is better than a tail of it.
+import { computed } from 'vue';
 import { PHASE_LABEL } from '../lib/format';
 import { RUN_PHASES } from '../lib/run';
 import type { RunPhase } from '../lib/run';
 
 const props = defineProps<{
   phase: RunPhase;
-  output: string;
   elapsed: string;
+  /** Absent when the run has no conversation to open yet. */
+  canOpenSession?: boolean;
 }>();
 
-const showOutput = ref(false);
+defineEmits<{ (e: 'open-session'): void }>();
 
 const steps = computed(() => {
   const at = RUN_PHASES.indexOf(props.phase);
@@ -50,19 +53,16 @@ const steps = computed(() => {
     <div class="progress__foot">
       <span class="progress__elapsed">{{ elapsed }}</span>
       <button
-        v-if="output"
+        v-if="canOpenSession"
         type="button"
         class="progress__toggle"
-        :aria-expanded="showOutput"
-        data-testid="idr-progress-toggle"
-        @click.stop="showOutput = !showOutput"
+        data-testid="idr-open-session"
+        @click.stop="$emit('open-session')"
       >
-        <i class="icon" :class="showOutput ? 'icon-chevron-up' : 'icon-chevron-down'" />
-        {{ showOutput ? 'Hide' : 'Show' }} agent output
+        <i class="icon icon-terminal" />
+        Watch the agent
       </button>
     </div>
-
-    <pre v-if="showOutput && output" class="progress__output">{{ output }}</pre>
   </div>
 </template>
 
@@ -168,21 +168,6 @@ const steps = computed(() => {
     &:hover {
       text-decoration: underline;
     }
-  }
-
-  &__output {
-    margin: 8px 0 0;
-    padding: 9px 11px;
-    max-height: 140px;
-    overflow: auto;
-    border-radius: 4px;
-    background: var(--nav-bg);
-    color: var(--muted);
-    font-family: var(--font-family-mono, monospace);
-    font-size: 11px;
-    line-height: 16px;
-    white-space: pre-wrap;
-    word-break: break-word;
   }
 }
 </style>

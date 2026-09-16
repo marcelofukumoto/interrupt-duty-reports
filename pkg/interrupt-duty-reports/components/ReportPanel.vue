@@ -49,6 +49,8 @@ const props = defineProps<{
    * actually wants a report gone is the moment they have just read it.
    */
   onDelete?: (meta: ReportMeta) => Promise<void> | void;
+  /** Opening the conversation that wrote this report, while the agent pod still holds it. */
+  onWatch?: (meta: ReportMeta) => void;
 }>();
 
 const report = ref<Report | null>(null);
@@ -375,6 +377,17 @@ const asText = computed(() => {
             </p>
           </div>
           <div class="panel__tools">
+            <button
+              v-if="onWatch && meta.session"
+              type="button"
+              class="panel__watch"
+              title="Open the conversation that wrote this report"
+              data-testid="idr-panel-watch"
+              @click="onWatch(meta)"
+            >
+              <i class="icon icon-terminal" />
+              Agent session
+            </button>
             <CopyButton :text="asText" :label="activeClass === 'ALL' ? 'Copy whole report' : 'Copy what is shown'" />
             <button
               type="button"
@@ -611,6 +624,25 @@ const asText = computed(() => {
     align-items: center;
     gap: 8px;
     flex-shrink: 0;
+  }
+
+  &__watch {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--body-bg);
+    color: var(--body-text);
+    font-size: 12px;
+    line-height: 18px;
+    cursor: pointer;
+
+    &:hover {
+      border-color: var(--link);
+      color: var(--link);
+    }
   }
 
   &__delete,
