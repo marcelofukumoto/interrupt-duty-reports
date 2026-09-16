@@ -187,17 +187,33 @@ export function podExec(
   });
 }
 
-/** A command that must have worked, with what went wrong if it did not. */
-export async function podExecOk(target: PodRef, command: string[], what: string, timeoutMs?: number): Promise<string> {
-  const result = await podExec(target, command, { timeoutMs });
+/**
+ * Whether a command worked is answered by the command, not by the socket.
+ *
+ * The apiserver's proxy sometimes closes an exec before the status frame that carries the exit
+ * code arrives. A command that also printed nothing is then indistinguishable from one that
+ * never ran - which is exactly what `mkdir -p && chown` is, and it was reported as "the exec
+ * was refused or dropped" every time while creating the directory perfectly.
+ *
+ * So every script run through here is made to say so itself, and the sentinel in its output is
+ * the answer. `set -e` because a script that fails halfway must not reach the echo.
+ */
+const OK_SENTINEL = '__IDR_OK__';
 
-  if (result.code !== 0) {
-    const why = result.stderr.trim() || result.status || `exit ${ result.code }`;
+export async function podRunScript(target: PodRef, script: string, what: string, timeoutMs?: number): Promise<string> {
+  const result = await podExec(
+    target,
+    ['/bin/sh', '-c', `set -e\n${ script }\necho ${ OK_SENTINEL }`],
+    { timeoutMs },
+  );
+
+  if (!result.stdout.includes(OK_SENTINEL)) {
+    const why = result.stderr.trim() || result.status || (result.code > 0 ? `exit ${ result.code }` : 'it reported nothing');
 
     throw new Error(`Could not ${ what }: ${ why }`);
   }
 
-  return result.stdout;
+  return result.stdout.replace(OK_SENTINEL, '').trim();
 }
 
 export function shellQuote(value: string): string {

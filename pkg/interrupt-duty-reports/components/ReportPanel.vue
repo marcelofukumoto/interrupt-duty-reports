@@ -15,6 +15,15 @@ import type { GitHubItem, JiraItem, QuestionItem, Report, ReportMeta } from '../
 
 const props = defineProps<{
   meta: ReportMeta;
+  /**
+   * The slide-in's own configuration, declared so that it is consumed rather than inherited.
+   *
+   * SlideInPanelManager hands the component everything it was opened with, and an undeclared
+   * prop falls through onto the root element - which put a literal `title` attribute on this
+   * div and gave the whole panel a browser tooltip on hover.
+   */
+  title?: string;
+  width?: string;
 }>();
 
 const report = ref<Report | null>(null);
@@ -162,7 +171,7 @@ const asText = computed(() => {
 </script>
 
 <template>
-  <div class="panel" data-testid="idr-report-panel">
+  <div class="panel">
     <div v-if="loading" class="panel__loading">
       <i class="icon icon-spinner icon-spin" />
       <span>Opening the report…</span>
@@ -173,7 +182,7 @@ const asText = computed(() => {
     </Banner>
 
     <template v-else-if="report">
-      <header class="panel__head">
+      <header class="panel__head" data-testid="idr-report-panel">
         <div>
           <p class="panel__eyebrow">
             Daily interrupt duty

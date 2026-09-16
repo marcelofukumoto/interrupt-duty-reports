@@ -16,7 +16,9 @@ import ReportPanel from '../components/ReportPanel.vue';
 import { agentsStatus, whenAgentsReady } from '../lib/agents';
 import type { AgentsStatus } from '../lib/agents';
 import { deleteReport, listReports, MAX_REPORTS, pruneToCap, setStatus } from '../lib/store';
-import { runActivity, startRun, stopRun } from '../lib/run';
+import {
+  runActivity, startRun, stopRun, sweepFinishedRuns, sweepRunDirectories,
+} from '../lib/run';
 import {
   countChips, elapsedLabel, isStale, statusStyle, whenLabel,
 } from '../lib/format';
@@ -43,6 +45,15 @@ const POLL_RUNNING_MS = 4000;
 const POLL_IDLE_MS = 45000;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let stopped = false;
+/**
+ * The run that was in flight on the previous tick.
+ *
+ * Kept so that the tick where a run *stops* being in flight is identifiable - that is the one
+ * moment the conversation behind it can be ended. Keying the cleanup off the activity line
+ * instead missed a run that finished before its pane was ever read, which is every run that
+ * takes less than one poll interval.
+ */
+let previousRun: string | null = null;
 
 const activeRun = computed(() => reports.value.find((r) => r.status === 'running') || null);
 const canGenerate = computed(() => agents.value.state === 'ready' && !activeRun.value && !starting.value);
@@ -54,6 +65,23 @@ async function refresh() {
   } catch (e: any) {
     error.value = e?.message || String(e);
   }
+}
+
+/**
+ * Clear up after runs that are over.
+ *
+ * A finished report leaves a conversation in the agent pod with an idle claude in it, because
+ * the pane runs claude in a loop so that it survives a crash - and a gathered data file beside
+ * it. Neither goes away on its own, so a hundred reports would be a hundred of each.
+ *
+ * Best-effort, and never surfaced: this is housekeeping, and a pod that has just restarted
+ * failing to answer it is not something to put a red banner over a list that is otherwise fine.
+ */
+async function sweep() {
+  const running = reports.value.filter((r) => r.status === 'running');
+
+  await sweepFinishedRuns(running.map((r) => r.session || '')).catch(() => undefined);
+  await sweepRunDirectories(reports.value.map((r) => r.id)).catch(() => undefined);
 }
 
 /**
@@ -80,9 +108,13 @@ function schedule() {
       } else {
         activity.value = await runActivity(run).catch(() => '');
       }
-    } else {
+    } else if (previousRun) {
+      // The tick on which a run stopped being in flight is the moment to clear up after it.
       activity.value = '';
+      await sweep();
     }
+
+    previousRun = run?.id || null;
 
     schedule();
   }, activeRun.value ? POLL_RUNNING_MS : POLL_IDLE_MS);
@@ -105,8 +137,12 @@ onMounted(async() => {
   await refresh();
   loading.value = false;
 
-  // Anything over the cap from before is cleared once, quietly, on the way in.
-  pruneToCap(MAX_REPORTS).then((pruned) => (pruned ? refresh() : undefined)).catch(() => undefined);
+  // Anything over the cap from before is cleared once, quietly, on the way in - and with it
+  // whatever earlier runs left in the pod, including any whose browser tab was closed on them.
+  pruneToCap(MAX_REPORTS)
+    .then((pruned) => (pruned ? refresh() : undefined))
+    .then(() => sweep())
+    .catch(() => undefined);
 
   schedule();
 });
@@ -131,7 +167,9 @@ async function generate(credentials: { jiraPat: string; ghToken: string }) {
 
   try {
     remembered.value = credentials;
-    await startRun(credentials, store.getters['auth/principal']?.loginName || undefined);
+    const started = await startRun(credentials, store.getters['auth/principal']?.loginName || undefined);
+
+    previousRun = started.id;
     askingForTokens.value = false;
     await refresh();
     restartPolling();
@@ -155,7 +193,9 @@ async function stop() {
   try {
     await stopRun(run);
     activity.value = '';
+    previousRun = null;
     await refresh();
+    await sweep();
     restartPolling();
   } catch (e: any) {
     error.value = e?.message || String(e);
@@ -177,6 +217,7 @@ async function remove(meta: ReportMeta) {
     await deleteReport(meta.id);
     confirmingDelete.value = null;
     await refresh();
+    await sweep();
   } catch (e: any) {
     error.value = e?.message || String(e);
   } finally {
@@ -376,6 +417,16 @@ function open(meta: ReportMeta) {
 </template>
 
 <style lang="scss" scoped>
+// Rancher's global `code` style is built for blocks: its padding turns a token name used
+// mid-sentence into a tall box that breaks the line it is on. Inline code here is a word.
+:deep(code) {
+  padding: 1px 5px;
+  font-size: 0.92em;
+  line-height: inherit;
+  vertical-align: baseline;
+  border-radius: 3px;
+}
+
 .idr {
   padding: 20px;
 

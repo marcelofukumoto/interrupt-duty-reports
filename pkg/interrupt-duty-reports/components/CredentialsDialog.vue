@@ -124,6 +124,16 @@ function run() {
 </template>
 
 <style lang="scss" scoped>
+// Rancher's global `code` style is built for blocks: its padding turns a token name used
+// mid-sentence into a tall box that breaks the line it is on. Inline code here is a word.
+:deep(code) {
+  padding: 1px 5px;
+  font-size: 0.92em;
+  line-height: inherit;
+  vertical-align: baseline;
+  border-radius: 3px;
+}
+
 .creds-backdrop {
   position: fixed;
   inset: 0;

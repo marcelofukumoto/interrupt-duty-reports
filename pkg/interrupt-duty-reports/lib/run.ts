@@ -19,7 +19,7 @@
 // prompt. The agent's job starts at data.json and stops at report.json; neither end of that is
 // left to it to improvise.
 import { AGENT_PROJECT, agentsApi } from './agents';
-import { podExec, podExecOk, podWriteFile, shellQuote } from './exec';
+import { podExec, podRunScript, podWriteFile, shellQuote } from './exec';
 import type { PodRef } from './exec';
 import { createRunning, setStatus, updateMeta } from './store';
 import { SEED_FILES } from '../seed.generated';
@@ -175,9 +175,9 @@ export async function startRun(credentials: Credentials, startedBy?: string): Pr
     await writeSeed(target);
 
     // The run directory, owned by the pane's user, because the agent writes report.json into it.
-    await podExecOk(
+    await podRunScript(
       target,
-      ['/bin/sh', '-c', `mkdir -p ${ shellQuote(runDir) } && chown ${ POD_USER } ${ shellQuote(runDir) }`],
+      `mkdir -p ${ shellQuote(runDir) } && chown ${ POD_USER } ${ shellQuote(runDir) }`,
       'make the run directory in the agent pod',
       20000,
     );
@@ -205,11 +205,11 @@ export async function startRun(credentials: Credentials, startedBy?: string): Pr
     // Start the pane detached. Starting a conversation only queues the prompt - it is read the
     // first time a pane attaches, and without this nothing would attach until somebody opened
     // the terminal by hand, which is not what pressing Generate means.
-    await podExecOk(
+    await podRunScript(
       target,
-      ['/bin/sh', '/seed/shell.sh', session, CONVERSATIONS, AGENT_HOME, 'start'],
+      `/bin/sh /seed/shell.sh ${ shellQuote(session) } ${ shellQuote(CONVERSATIONS) } ${ shellQuote(AGENT_HOME) } start`,
       'start the conversation in the agent pod',
-      60000,
+      120000,
     );
 
     return { id, session };
@@ -252,6 +252,75 @@ export async function stopRun(meta: ReportMeta): Promise<void> {
   }
 
   await setStatus(meta.id, 'cancelled', 'Stopped from the reports page.');
+}
+
+/**
+ * End the conversations of runs that are over, and delete what they left in the pod.
+ *
+ * A conversation does not end when the work in it does. claude-session.sh runs claude in a
+ * loop so that a pane survives a crash, which means a finished report leaves a tmux session
+ * with an idle claude in it - and a hundred reports would leave a hundred of them in one pod,
+ * along with a hundred run directories of gathered JSON.
+ *
+ * So this is the other half of a run, and it is a sweep rather than a step at the end of one:
+ * the run that matters most to clean up is the one whose browser tab was closed while it was
+ * finishing, and that run has nothing left to execute a final step. It takes the sessions that
+ * are still in flight and ends everything else this extension started.
+ */
+export async function sweepFinishedRuns(activeSessions: string[]): Promise<number> {
+  const api = agentsApi();
+
+  if (!api) {
+    return 0;
+  }
+
+  const keep = new Set(activeSessions.filter(Boolean));
+  const sessions = await api.agent.projectSessions(AGENT_PROJECT).catch(() => []);
+  let ended = 0;
+
+  for (const session of sessions) {
+    if (keep.has(session.id)) {
+      continue;
+    }
+
+    await api.agent.end(session.id).catch(() => undefined);
+    ended++;
+  }
+
+  return ended;
+}
+
+/**
+ * Remove the run directories of reports that no longer exist.
+ *
+ * Driven from the ids that are still stored rather than from a date: a run directory is worth
+ * keeping exactly as long as the report it produced is in the list, and the list is capped, so
+ * this is what stops the pod's disk growing with it. A run that failed leaves a directory and
+ * a summary, and is cleaned up when that summary is deleted.
+ */
+export async function sweepRunDirectories(keepIds: string[]): Promise<void> {
+  const api = agentsApi();
+  const pod = await api?.agent.pod().catch(() => null);
+
+  if (!pod) {
+    return;
+  }
+
+  const keep = keepIds.filter((id) => /^[a-z0-9][a-z0-9-]*$/.test(id));
+  const keepList = keep.map(shellQuote).join(' ');
+  // Built as a list of names to keep rather than a list to delete, so a directory this page has
+  // never heard of - a run from a browser that has since been closed - is cleaned up too.
+  const script = [
+    `cd ${ shellQuote(ROOT) } 2>/dev/null || exit 0`,
+    `for dir in daily-*; do`,
+    `  [ -d "$dir" ] || continue`,
+    `  keep=no`,
+    keepList ? `  for id in ${ keepList }; do [ "$dir" = "$id" ] && keep=yes; done` : '  :',
+    `  [ "$keep" = yes ] || rm -rf "$dir"`,
+    'done',
+  ].join('\n');
+
+  await podExec(agentTarget(pod), ['/bin/sh', '-c', script], { timeoutMs: 30000 }).catch(() => undefined);
 }
 
 /**
