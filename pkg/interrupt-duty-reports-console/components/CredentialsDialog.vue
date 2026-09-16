@@ -16,6 +16,8 @@ import type { CredentialStatus } from '../lib/credentials';
 
 const props = defineProps<{
   status: CredentialStatus;
+  /** Whose credentials these are. Stored per person, so this is about yours and nobody else's. */
+  principalId: string;
   /** True when this opened because a run could not start without them. */
   blocking?: boolean;
   busy?: boolean;
@@ -33,8 +35,7 @@ const showGithub = ref(false);
 const saving = ref(false);
 const error = ref('');
 
-const ghStored = computed(() => props.status.gh !== 'none');
-const borrowed = computed(() => props.status.gh === 'studio');
+const ghStored = computed(() => props.status.gh);
 
 /** Nothing typed and nothing missing means there is nothing to do but carry on. */
 const ready = computed(() => (ghStored.value || !!github.value.trim()) && (props.status.jira || !!jira.value.trim()));
@@ -48,7 +49,7 @@ async function save() {
   error.value = '';
 
   try {
-    await saveCredentials({
+    await saveCredentials(props.principalId, {
       ...(github.value.trim() ? { ghToken: github.value.trim() } : {}),
       ...(jira.value.trim() ? { jiraPat: jira.value.trim() } : {}),
     });
@@ -67,7 +68,7 @@ async function clear(which: 'gh' | 'jira') {
   error.value = '';
 
   try {
-    await saveCredentials(which === 'gh' ? { ghToken: '' } : { jiraPat: '' });
+    await saveCredentials(props.principalId, which === 'gh' ? { ghToken: '' } : { jiraPat: '' });
     emit('saved');
   } catch (e: any) {
     error.value = e?.message || String(e);
@@ -93,12 +94,13 @@ async function clear(which: 'gh' | 'jira') {
       <p class="creds__lede">
         <template v-if="blocking">
           A report reads the three active Jira queues and the last 30 days of
-          <code>rancher/dashboard</code> community issues, so it needs a token for each. They are
-          stored once — you will not be asked again.
+          <code>rancher/dashboard</code> community issues as <em>you</em>, so it needs your own
+          token for each. They are stored once — you will not be asked again.
         </template>
         <template v-else>
-          Stored in a Secret and read by the agent pod when a report runs. They never come back
-          out to this page, so a stored one can be replaced but not shown.
+          Yours, not the installation's: a report is fetched with your access. Stored in a Secret
+          and read by the agent pod when a report runs — they never come back out to this page, so
+          a stored one can be replaced but not shown.
         </template>
       </p>
 
@@ -138,18 +140,14 @@ async function clear(which: 'gh' | 'jira') {
         <span class="creds__label">
           GitHub token
           <span class="creds__state" :class="{ 'is-set': ghStored }">
-            {{ borrowed ? 'From Extension Studio' : ghStored ? 'Stored' : 'Not set' }}
+            {{ ghStored ? 'Stored' : 'Not set' }}
           </span>
         </span>
         <span class="creds__hint">
           Read-only, public access is all it needs: a classic token with the
           <code>public_repo</code> scope, or a fine-grained token with
           <em>Public repositories (read-only)</em>. It never writes.
-          <template v-if="borrowed">
-            Extension Studio already has one and this borrows it; setting one here uses that
-            instead.
-          </template>
-          <template v-else-if="ghStored"> Leave blank to keep the stored one.</template>
+          <template v-if="ghStored"> Leave blank to keep the stored one.</template>
         </span>
         <span class="creds__input">
           <input
@@ -165,15 +163,16 @@ async function clear(which: 'gh' | 'jira') {
             <i class="icon" :class="showGithub ? 'icon-hide' : 'icon-show'" />
           </button>
         </span>
-        <button v-if="status.gh === 'ours'" type="button" class="creds__clear" :disabled="saving" @click="clear('gh')">
+        <button v-if="ghStored" type="button" class="creds__clear" :disabled="saving" @click="clear('gh')">
           Remove the stored token
         </button>
       </label>
 
       <Banner color="info" class="creds__note">
-        Written straight into the Secret and never read back by this page — replacing one is
-        possible, seeing it is not. The agent pod reads them with its own ServiceAccount at the
-        moment a report runs.
+        Written straight into the Secret under keys of your own and never read back by this page
+        — replacing one is possible, seeing it is not. Saving touches your keys alone, so nobody
+        else's tokens are read or rewritten. The agent pod reads them with its own ServiceAccount
+        at the moment a report runs.
       </Banner>
 
       <div class="creds__actions">

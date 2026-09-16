@@ -22,6 +22,7 @@ import { agentProject, agentsApi } from './agents';
 import { podExec, podRunScript, podWriteFile, shellQuote } from './exec';
 import type { PodRef } from './exec';
 import { createRunning, setStatus, updateMeta } from './store';
+import { userSlug } from './credentials';
 import { SEED_FILES } from '../seed.generated';
 import type { ReportMeta } from '../types';
 
@@ -70,7 +71,7 @@ function idAndDate(now: Date): { id: string; date: string } {
  * from there - so this text, which ends up in a transcript and on a terminal somebody may be
  * watching, has nothing in it worth hiding.
  */
-function openingPrompt(runDir: string, id: string, date: string): string {
+function openingPrompt(runDir: string, id: string, date: string, slug: string): string {
   return [
     `Generate the Rancher UI interrupt-duty daily report for ${ date }.`,
     '',
@@ -78,7 +79,7 @@ function openingPrompt(runDir: string, id: string, date: string): string {
     '',
     'Do these four steps in order, without stopping to ask anything:',
     '',
-    `1. Gather the data:  sh ${ ROOT }/run.sh ${ runDir }`,
+    `1. Gather the data:  sh ${ ROOT }/run.sh ${ runDir } ${ slug }`,
     `   It writes ${ runDir }/data.json. It already has the credentials it needs - do not look`,
     '   for them, do not ask for them, and do not print them.',
     '',
@@ -139,7 +140,7 @@ async function writeSeed(target: PodRef): Promise<void> {
  * anything after the summary ConfigMap fails, the summary is marked failed on the way out, so
  * the list shows what happened instead of a row stuck on "running" forever.
  */
-export async function startRun(startedBy?: string): Promise<StartedRun> {
+export async function startRun(principalId: string, startedBy?: string): Promise<StartedRun> {
   const api = agentsApi();
 
   if (!api) {
@@ -182,7 +183,7 @@ export async function startRun(startedBy?: string): Promise<StartedRun> {
     const session = await api.agent.startInProject(
       agentProject(id),
       `Daily report ${ date }`,
-      openingPrompt(runDir, id, date),
+      openingPrompt(runDir, id, date, userSlug(principalId)),
     );
 
     // After the conversation exists, not before. meta.json travels with the run so that

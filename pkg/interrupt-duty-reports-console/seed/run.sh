@@ -10,21 +10,19 @@
 # is stored once in a Secret and read at the moment it is needed, by the pod, with the pod's own
 # ServiceAccount. The browser never holds one, so there is nothing for it to leak.
 #
-# usage: run.sh <run-dir>
+# usage: run.sh <run-dir> <user-slug>
 set -e
 
 DIR=${1:?run.sh needs the run directory}
+# Whose credentials. They are stored per Rancher user, so a report is generated with the access
+# of the person who asked for it rather than with one shared account nobody can identify.
+USER_SLUG=${2:?run.sh needs the user slug}
 SEED=$(dirname "$0")
 
 [ -d "$DIR" ] || { echo "run.sh: no such run directory: $DIR" >&2; exit 2; }
 
 NS=interrupt-duty-reports-console
 SECRET=settings
-# Extension Studio keeps an account's GitHub token under this exact name. Ours is preferred -
-# setting one here is somebody choosing it for this extension - and theirs is the fallback, so
-# nobody has to keep two copies of one secret in step.
-STUDIO_NS=extension-studio
-STUDIO_SECRET=settings
 
 # kubectl as the pod rather than as whoever opened a terminal in it. shell.sh writes a kubeconfig
 # carrying the Rancher identity of the person who opened the pane (seed/rancher-credential.sh),
@@ -36,16 +34,15 @@ secret_key() {
     | tr -d '\r\n'
 }
 
-GH_TOKEN=$(secret_key "$NS" "$SECRET" gh_token)
-[ -n "$GH_TOKEN" ] || GH_TOKEN=$(secret_key "$STUDIO_NS" "$STUDIO_SECRET" gh_token)
-JIRA_PAT=$(secret_key "$NS" "$SECRET" jira_pat)
+GH_TOKEN=$(secret_key "$NS" "$SECRET" "gh_token-$USER_SLUG")
+JIRA_PAT=$(secret_key "$NS" "$SECRET" "jira_pat-$USER_SLUG")
 
 missing=''
 [ -n "$JIRA_PAT" ] || missing="a Jira token"
 [ -n "$GH_TOKEN" ] || missing="${missing:+$missing and }a GitHub token"
 
 if [ -n "$missing" ]; then
-  echo "run.sh: $missing is not stored. Set it from the extension's Credentials dialog." >&2
+  echo "run.sh: $missing is not stored for this user. Set it from the Credentials dialog." >&2
   exit 2
 fi
 

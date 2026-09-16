@@ -43,6 +43,14 @@ import type { ReportMeta } from '../types';
 
 const store = useStore();
 
+/**
+ * Who is looking at this, as Rancher knows them.
+ *
+ * Credentials are stored per user, so this decides whose Jira and GitHub access a report is
+ * generated with - rather than one shared account nobody can identify afterwards.
+ */
+const principalId = computed<string>(() => store.getters['auth/principalId'] || '');
+
 const reports = ref<ReportMeta[]>([]);
 const agents = ref<AgentsStatus>({
   state: 'checking', version: null, pod: null, detail: 'Looking for the Agents extension…',
@@ -296,7 +304,7 @@ onMounted(async() => {
   agents.value = await agentsStatus();
 
   await refresh();
-  credentials.value = await readCredentialStatus().catch(() => credentials.value);
+  credentials.value = await readCredentialStatus(principalId.value).catch(() => credentials.value);
   loading.value = false;
 
   window.addEventListener('keydown', onKeydown);
@@ -330,7 +338,7 @@ async function openGenerate() {
     return;
   }
 
-  credentials.value = await readCredentialStatus().catch(() => credentials.value);
+  credentials.value = await readCredentialStatus(principalId.value).catch(() => credentials.value);
 
   if (haveCredentials.value) {
     await generate();
@@ -345,12 +353,12 @@ async function openGenerate() {
 function manageCredentials() {
   blockingCredentials.value = false;
   askingForTokens.value = true;
-  readCredentialStatus().then((status) => (credentials.value = status)).catch(() => undefined);
+  readCredentialStatus(principalId.value).then((status) => (credentials.value = status)).catch(() => undefined);
 }
 
 /** After the dialog saved: pick up the new state, and carry on if it was in the way of a run. */
 async function credentialsSaved() {
-  credentials.value = await readCredentialStatus().catch(() => credentials.value);
+  credentials.value = await readCredentialStatus(principalId.value).catch(() => credentials.value);
 
   if (!blockingCredentials.value) {
     askingForTokens.value = false;
@@ -369,7 +377,7 @@ async function generate() {
   error.value = '';
 
   try {
-    const started = await startRun(store.getters['auth/principal']?.loginName || undefined);
+    const started = await startRun(principalId.value, store.getters['auth/principalId'] || undefined);
 
     previousRun = started.id;
     // A run always lands on today, so that is the month to be looking at.
@@ -671,6 +679,7 @@ function open(meta: ReportMeta) {
     <CredentialsDialog
       v-if="askingForTokens"
       :status="credentials"
+      :principal-id="principalId"
       :blocking="blockingCredentials"
       :busy="starting"
       @cancel="askingForTokens = false"
