@@ -157,6 +157,11 @@ improvise, and `publish.sh` refuses to publish a `report.json` that is not a val
 
 ### Watching the agent
 
+There is one drawer, so opening the session replaces the report in it. That made closing a dead
+end — it put you back on the calendar rather than where you came from — so the session opened
+from a report carries a **Back to the report** action beside its Close. A session opened from
+the strip of a run still in flight does not: there is no report yet to go back to.
+
 The pane is the Agents extension's own terminal component, placed in a drawer of this
 extension's — the pattern `dev-extension` uses to put a conversation under a pull-request
 comment, and the one thing that extension publishes for others to borrow. Nothing here owns a

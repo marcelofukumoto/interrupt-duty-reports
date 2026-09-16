@@ -13,11 +13,21 @@
 import { ref } from 'vue';
 import { Banner } from '@components/Banner';
 import Drawer from '@shell/components/Drawer/Chrome.vue';
+import RcButton from '@components/RcButton/RcButton.vue';
 import AgentTerminal from './AgentTerminal.vue';
 import type { ReportMeta } from '../types';
 
-defineProps<{
+const props = defineProps<{
   meta: ReportMeta;
+  /**
+   * Reopening the report this was opened from.
+   *
+   * There is one drawer, so opening the session replaced the report in it - and closing then
+   * put you back on the calendar rather than where you came from, which is a dead end when the
+   * session was a detour from reading a report. Absent when there was nothing to come back to,
+   * which is the case while a run is still in flight.
+   */
+  onBack?: (meta: ReportMeta) => void;
   /** The drawer's own configuration, declared so it is consumed rather than set as an attribute. */
   width?: string;
   height?: string;
@@ -40,7 +50,6 @@ const state = ref('');
 <template>
   <Drawer
     :aria-target="`the agent session for ${ meta.reportDate }`"
-    remove-footer
     @close="emit('close')"
   >
     <template #title>
@@ -75,6 +84,18 @@ const state = ref('');
           this page.
         </p>
       </div>
+    </template>
+
+    <template #additional-actions>
+      <RcButton
+        v-if="onBack"
+        variant="secondary"
+        size="large"
+        data-testid="idr-session-back"
+        @click="props.onBack?.(meta)"
+      >
+        Back to the report
+      </RcButton>
     </template>
   </Drawer>
 </template>

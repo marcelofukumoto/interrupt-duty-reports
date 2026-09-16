@@ -390,7 +390,7 @@ async function remove(meta: ReportMeta) {
  * that extension's own panel instead meant reaching for state and a keystroke it never
  * published, and putting this extension's conversations in a tab strip meant for theirs.
  */
-function watchSession(meta: ReportMeta) {
+function watchSession(meta: ReportMeta, fromReport = false) {
   if (!meta.session) {
     return;
   }
@@ -405,6 +405,9 @@ function watchSession(meta: ReportMeta) {
       triggerFocusTrap:   true,
       closeOnRouteChange: ['name', 'params', 'query'],
       onClose:            () => store.commit('slideInPanel/close'),
+      // Only when the session was a detour from reading a report. Opened from the strip of a
+      // run still in flight there is no report yet, so there is nowhere to go back to.
+      onBack:             fromReport ? open : undefined,
       meta,
     },
   });
@@ -428,7 +431,7 @@ function open(meta: ReportMeta) {
       previousId:   previous?.id,
       previousDate: previous?.reportDate,
       onDelete:     remove,
-      onWatch:      watchSession,
+      onWatch:      (value: ReportMeta) => watchSession(value, true),
     },
   });
 }
