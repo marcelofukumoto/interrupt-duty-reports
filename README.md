@@ -7,18 +7,38 @@ stores the result in the cluster, and shows it as something you can read and act
 Jira ticket and community issue with a class, a recommended next step, and a comment you can
 copy and send.
 
-![The list, and one report open in the slide-in panel](#)
-
 ## What it does
 
 - **Generate** — starts a conversation in the cluster's agent pod. The agent gathers the day's
-  data, analyses it against the report specification, and publishes the result.
+  data, analyses it against the report specification, and publishes the result. While it runs,
+  the row shows which of the four steps it is on — read from the files the run has produced, not
+  guessed from the terminal.
 - **Stop** — ends the run in flight.
 - **Delete** — removes one report.
 
 Reports are kept as ConfigMaps, so they survive a pod restart, a Rancher restart and a
 reinstall of this extension. The newest **100** are retained; publishing the 101st removes the
 oldest.
+
+### Reading a report
+
+The report opens in a wide slide-in, and three things there do most of the work:
+
+- **Filter by class.** On a busy day a report is thirty items and you almost always want one
+  subset of them — usually *Act now*. The chips filter every section at once, the section
+  counts follow, and the copy button copies what you are looking at rather than the lot.
+- **What changed since the last report.** A ticket appearing for the first time is a new
+  obligation; one appearing for the fourth day running is the queue not moving. The previous
+  report is compared against this one, the header says how many are new, carried over and
+  cleared, and the new ones are badged. It costs one extra ConfigMap read and nothing from the
+  agent — the report format is unchanged.
+- **A header that stays.** The date, the filters and the section jumps stay put while the body
+  scrolls, shrinking once you are past the top so they cost a strip rather than a third of the
+  panel.
+
+The list itself groups by day, is searchable by date, ticket reference or summary (`/` focuses
+the box), and leads with a stat tile: how many items are owed a move today, the change since
+the previous report, and the trend across the last dozen.
 
 ## Requirements
 
@@ -121,15 +141,27 @@ hundred reports. The payload is fetched only when a report is opened.
 ```sh
 nvm use                 # node 24
 yarn install
-yarn gen-seed           # after editing anything under pkg/*/seed
+yarn gen-seed           # after editing anything under pkg/*/seed or pkg/*/assets
 yarn lint
 yarn type-check
 yarn build-pkg interrupt-duty-reports
 ```
 
-`seed.generated.ts` is committed, so a normal build never runs `gen-seed` — but the in-pod
-scripts are written into the pod from that generated file on **every run**, so an edit under
-`seed/` that has not been regenerated is an edit that never reaches the pod.
+`seed.generated.ts` and `icon.generated.ts` are committed, so a normal build never runs
+`gen-seed` — but the in-pod scripts are written into the pod from the generated file on **every
+run**, so an edit under `seed/` that has not been regenerated is an edit that never reaches the
+pod. CI regenerates both and fails on a diff.
+
+### The icons
+
+Two, for two different renderers:
+
+| File | Where it is used | Constraint |
+| --- | --- | --- |
+| `assets/nav-icon.svg` | the sidebar | **One colour.** Rancher renders a product's icon through an `<img>` and recolours it with a generated CSS filter (shell's `IconOrSvg`), which assumes a single colour to filter from — a two-colour glyph comes out mangled. It is inlined into the bundle as a data URI, because a built extension is served from a path chosen by whoever installed it, so an emitted asset's URL is not something the build gets to know. |
+| `assets/icon.svg` | the Extensions catalog card | Shown as-is, so it keeps its colours. Published to the root of `gh-pages` and named by `package.json`'s `icon`. |
+
+Both draw the same mark — a report with an alert on it — so the two read as one thing.
 
 ## Installing
 

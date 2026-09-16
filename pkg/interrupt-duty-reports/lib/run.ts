@@ -324,23 +324,61 @@ export async function sweepRunDirectories(keepIds: string[]): Promise<void> {
 }
 
 /**
- * What the agent's pane is showing, for the activity line under a running report.
+ * Where a run has got to.
  *
- * Read-only and best-effort: a pod that has just restarted has no pane to read, which is not an
- * error worth showing anybody.
+ * Read off the run directory rather than off the terminal, and that is the whole point. The
+ * pane's last few lines are whatever claude happened to print - a tool call, a token count, a
+ * half-drawn spinner - which is honest but says nothing about progress, and reading progress
+ * out of prose is guessing. The three files a run produces say it exactly: the gather writes
+ * data.json, the agent writes report.json, publish.sh removes creds.json on its way out.
  */
-export async function runActivity(meta: ReportMeta, lines = 8): Promise<string> {
+export type RunPhase = 'starting' | 'gathering' | 'analysing' | 'publishing';
+
+export interface RunProgress {
+  phase: RunPhase;
+  /** The pane's last few lines, kept as detail somebody can open rather than as the headline. */
+  output: string;
+}
+
+export const RUN_PHASES: RunPhase[] = ['starting', 'gathering', 'analysing', 'publishing'];
+
+export async function runProgress(meta: ReportMeta, lines = 12): Promise<RunProgress> {
   const api = agentsApi();
 
   if (!api || !meta.session) {
-    return '';
+    return { phase: 'starting', output: '' };
   }
 
-  const pane = await api.agent.pane(meta.session, lines).catch(() => null);
+  const pod = await api.agent.pod().catch(() => null);
 
-  if (!pane?.running) {
-    return '';
+  // Asked together: one of these is a directory listing and the other is a terminal capture,
+  // and a person is watching both change.
+  const [listing, pane] = await Promise.all([
+    pod
+      ? podExec(
+        agentTarget(pod),
+        ['/bin/sh', '-c', `ls -1 ${ shellQuote(`${ ROOT }/${ meta.id }`) } 2>/dev/null`],
+        { timeoutMs: 15000 },
+      ).catch(() => null)
+      : Promise.resolve(null),
+    api.agent.pane(meta.session, lines).catch(() => null),
+  ]);
+
+  const files = new Set((listing?.stdout || '').split('\n').map((l) => l.trim()).filter(Boolean));
+
+  let phase: RunPhase = 'starting';
+
+  if (files.has('report.json')) {
+    phase = 'publishing';
+  } else if (files.has('data.json')) {
+    phase = 'analysing';
+  } else if (files.has('meta.json')) {
+    phase = 'gathering';
   }
 
-  return pane.text.split('\n').map((l) => l.trim()).filter(Boolean).slice(-3).join('\n');
+  const output = pane?.running
+    ? pane.text.split('\n').map((l) => l.trim()).filter(Boolean).slice(-6).join('\n')
+    : '';
+
+  return { phase, output };
 }

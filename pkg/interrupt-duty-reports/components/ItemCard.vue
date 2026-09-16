@@ -22,6 +22,9 @@ const props = defineProps<{
   nextStep: NextStep;
   suggestedComment?: string | null;
   quickAction?: QuickAction | null;
+  /** On this report and not on the one before it - a new obligation rather than a standing one. */
+  isNew?: boolean;
+  newSince?: string;
 }>();
 
 const style = computed(() => classStyle(props.itemClass));
@@ -49,9 +52,18 @@ const activity = computed(() => {
         {{ reference }}
         <i class="icon icon-external-link" />
       </a>
-      <span class="item__badge" :title="style.hint">
-        <i class="icon" :class="style.icon" />
-        {{ style.label }}
+      <span class="item__flags">
+        <span
+          v-if="isNew"
+          class="item__new"
+          :title="newSince ? `Not on the report for ${ newSince }` : 'New on this report'"
+        >
+          New
+        </span>
+        <span class="item__badge" :title="style.hint">
+          <i class="icon" :class="style.icon" />
+          {{ style.label }}
+        </span>
       </span>
     </header>
 
@@ -150,6 +162,26 @@ const activity = computed(() => {
       font-size: 11px;
       opacity: 0.7;
     }
+  }
+
+  &__flags {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  // Filled rather than outlined, unlike the class badge beside it, so "new" reads as the louder
+  // of the two at a glance - which is the point of it.
+  &__new {
+    padding: 2px 8px;
+    border-radius: 11px;
+    background: var(--warning);
+    color: var(--body-bg);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
   }
 
   &__badge {

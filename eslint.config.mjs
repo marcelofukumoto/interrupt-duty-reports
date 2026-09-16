@@ -5,7 +5,7 @@ import vue from 'eslint-plugin-vue';
 import globals from 'globals';
 
 export default [
-  { ignores: ['node_modules/**', 'dist-pkg/**', '.shell/**', 'pkg/*/seed.generated.ts'] },
+  { ignores: ['node_modules/**', 'dist-pkg/**', '.shell/**', 'pkg/*/*.generated.ts'] },
   js.configs.recommended,
   ...ts.configs.recommended,
   ...vue.configs['flat/recommended'],

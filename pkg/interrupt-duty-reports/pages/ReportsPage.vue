@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The whole extension, as a page: three buttons and the list of reports.
+// The whole extension, as a page: the three buttons and the list of reports.
 //
 // Generate and Stop sit in the header, because there is only ever one run in flight and it
 // belongs to the page rather than to any row. Delete is per report, because that is what
@@ -8,20 +8,28 @@
 // Nothing is polled when nothing is happening. A run in flight is watched every few seconds -
 // the agent publishes into the cluster and the row follows it - and a settled list is refreshed
 // only when the page is opened or somebody asks.
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import {
+  computed, onBeforeUnmount, onMounted, ref,
+} from 'vue';
 import { useStore } from 'vuex';
 import { Banner } from '@components/Banner';
 import CredentialsDialog from '../components/CredentialsDialog.vue';
 import ReportPanel from '../components/ReportPanel.vue';
+import ReportRow from '../components/ReportRow.vue';
+import TrendTile from '../components/TrendTile.vue';
 import { agentsStatus, whenAgentsReady } from '../lib/agents';
 import type { AgentsStatus } from '../lib/agents';
-import { deleteReport, listReports, MAX_REPORTS, pruneToCap, setStatus } from '../lib/store';
 import {
-  runActivity, startRun, stopRun, sweepFinishedRuns, sweepRunDirectories,
+  deleteReport, listReports, MAX_REPORTS, pruneToCap, setStatus,
+} from '../lib/store';
+import {
+  runProgress, startRun, stopRun, sweepFinishedRuns, sweepRunDirectories,
 } from '../lib/run';
+import type { RunProgress } from '../lib/run';
 import {
-  countChips, elapsedLabel, isStale, statusStyle, whenLabel,
+  actNowTrend, DAY_GROUP_ORDER, dayGroup, isStale, searchText,
 } from '../lib/format';
+import type { DayGroup } from '../lib/format';
 import type { ReportMeta } from '../types';
 
 const store = useStore();
@@ -35,9 +43,11 @@ const error = ref('');
 const askingForTokens = ref(false);
 const starting = ref(false);
 const stopping = ref(false);
-const activity = ref('');
+const progress = ref<RunProgress | null>(null);
 const deleting = ref<string | null>(null);
 const confirmingDelete = ref<string | null>(null);
+const query = ref('');
+const searchBox = ref<HTMLInputElement | null>(null);
 /** The tab's memory of the two tokens, so a second report in one sitting is one click. */
 const remembered = ref({ jiraPat: '', ghToken: '' });
 
@@ -46,17 +56,66 @@ const POLL_IDLE_MS = 45000;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let stopped = false;
 /**
- * The run that was in flight on the previous tick.
- *
- * Kept so that the tick where a run *stops* being in flight is identifiable - that is the one
- * moment the conversation behind it can be ended. Keying the cleanup off the activity line
- * instead missed a run that finished before its pane was ever read, which is every run that
- * takes less than one poll interval.
+ * The run that was in flight on the previous tick, so the tick where a run *stops* being in
+ * flight is identifiable - that is the one moment its conversation can be ended.
  */
 let previousRun: string | null = null;
 
 const activeRun = computed(() => reports.value.find((r) => r.status === 'running') || null);
 const canGenerate = computed(() => agents.value.state === 'ready' && !activeRun.value && !starting.value);
+const trend = computed(() => actNowTrend(reports.value));
+
+const matching = computed(() => {
+  const needle = query.value.trim().toLowerCase();
+
+  if (!needle) {
+    return reports.value;
+  }
+
+  return reports.value.filter((report) => searchText(report).includes(needle));
+});
+
+/** The list, in dated groups, with empty groups dropped rather than shown as headings. */
+const groups = computed(() => {
+  const now = new Date();
+  const buckets = new Map<DayGroup, ReportMeta[]>();
+
+  for (const report of matching.value) {
+    const group = dayGroup(report.reportDate, now);
+    const bucket = buckets.get(group);
+
+    if (bucket) {
+      bucket.push(report);
+    } else {
+      buckets.set(group, [report]);
+    }
+  }
+
+  return DAY_GROUP_ORDER
+    .filter((name) => buckets.has(name))
+    .map((name) => ({ name, reports: buckets.get(name)! }));
+});
+
+/**
+ * The report each one is compared against: the next complete report older than it.
+ *
+ * Worked out here rather than in the panel because only the list knows the order, and the panel
+ * is handed one report.
+ */
+const previousComplete = computed(() => {
+  const map = new Map<string, ReportMeta>();
+  const complete = reports.value.filter((r) => r.status === 'complete');
+
+  complete.forEach((report, i) => {
+    const older = complete[i + 1];
+
+    if (older) {
+      map.set(report.id, older);
+    }
+  });
+
+  return map;
+});
 
 async function refresh() {
   try {
@@ -103,14 +162,14 @@ function schedule() {
       // publish an outcome - so the page is what finally says the run is not coming back.
       if (isStale(run)) {
         await setStatus(run.id, 'failed', 'The run stopped reporting — the agent pod was probably restarted. Generate it again.').catch(() => undefined);
-        activity.value = '';
+        progress.value = null;
         await refresh();
       } else {
-        activity.value = await runActivity(run).catch(() => '');
+        progress.value = await runProgress(run).catch(() => null);
       }
     } else if (previousRun) {
       // The tick on which a run stopped being in flight is the moment to clear up after it.
-      activity.value = '';
+      progress.value = null;
       await sweep();
     }
 
@@ -128,6 +187,20 @@ function restartPolling() {
   schedule();
 }
 
+/** `/` to search and Escape to clear it, which is what every list in this dashboard does. */
+function onKeydown(event: KeyboardEvent) {
+  const target = event.target as HTMLElement | null;
+  const typing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+
+  if (event.key === '/' && !typing) {
+    event.preventDefault();
+    searchBox.value?.focus();
+  } else if (event.key === 'Escape' && target === searchBox.value) {
+    query.value = '';
+    searchBox.value?.blur();
+  }
+}
+
 onMounted(async() => {
   // The agents bundle may not have installed its API yet: two extensions on one page load in
   // whatever order Rancher loaded them.
@@ -136,6 +209,8 @@ onMounted(async() => {
 
   await refresh();
   loading.value = false;
+
+  window.addEventListener('keydown', onKeydown);
 
   // Anything over the cap from before is cleared once, quietly, on the way in - and with it
   // whatever earlier runs left in the pod, including any whose browser tab was closed on them.
@@ -149,6 +224,7 @@ onMounted(async() => {
 
 onBeforeUnmount(() => {
   stopped = true;
+  window.removeEventListener('keydown', onKeydown);
   if (timer) {
     clearTimeout(timer);
   }
@@ -192,7 +268,7 @@ async function stop() {
 
   try {
     await stopRun(run);
-    activity.value = '';
+    progress.value = null;
     previousRun = null;
     await refresh();
     await sweep();
@@ -226,9 +302,7 @@ async function remove(meta: ReportMeta) {
 }
 
 function open(meta: ReportMeta) {
-  if (meta.status !== 'complete') {
-    return;
-  }
+  const previous = previousComplete.value.get(meta.id);
 
   store.commit('slideInPanel/open', {
     component:      ReportPanel,
@@ -236,6 +310,8 @@ function open(meta: ReportMeta) {
       title: `Daily report · ${ meta.reportDate }`,
       width: 'wide',
       meta,
+      previousId:   previous?.id,
+      previousDate: previous?.reportDate,
     },
   });
 }
@@ -244,14 +320,13 @@ function open(meta: ReportMeta) {
 <template>
   <div class="idr">
     <header class="idr__head">
-      <div>
+      <div class="idr__titles">
         <h1 class="idr__title">
-          Interrupt duty reports
+          Interrupt duty
         </h1>
         <p class="idr__lede">
-          The day's Jira escalations and <code>rancher/dashboard</code> community issues, each
-          with a recommended next step and a comment you can send. Generated by the agent in
-          this cluster and kept here — the newest {{ MAX_REPORTS }} are retained.
+          The day's Jira escalations and <code>rancher/dashboard</code> community issues — each
+          with a next step and a comment you can send.
         </p>
       </div>
 
@@ -265,7 +340,7 @@ function open(meta: ReportMeta) {
           @click="openGenerate"
         >
           <i class="icon icon-play" />
-          Generate daily report
+          Generate report
         </button>
         <button
           type="button"
@@ -281,17 +356,17 @@ function open(meta: ReportMeta) {
       </div>
     </header>
 
+    <!--
+      The agent's state is a one-line note while it is fine and a banner only when it is not.
+      A full-width green bar saying everything works is a bar that is on screen every second of
+      every day to report an absence of news, and it pushed the actual content down with it.
+    -->
     <Banner
       v-if="agents.state !== 'ready' && agents.state !== 'checking'"
       :color="agents.state === 'no-pod' ? 'warning' : 'error'"
       data-testid="idr-agents-banner"
     >
       <strong>Agents is not ready.</strong> {{ agents.detail }}
-    </Banner>
-
-    <Banner v-else-if="agents.state === 'ready'" color="success" class="idr__ready" data-testid="idr-agents-banner">
-      <i class="icon icon-checkmark" />
-      <span>{{ agents.detail }}</span>
     </Banner>
 
     <Banner v-if="error" color="error">
@@ -303,107 +378,75 @@ function open(meta: ReportMeta) {
       <span>Loading reports…</span>
     </div>
 
-    <p v-else-if="!reports.length" class="idr__empty">
-      No reports yet. Generate one — it takes a few minutes, and you can watch it work below.
-    </p>
+    <template v-else-if="!reports.length">
+      <section class="idr__empty" data-testid="idr-empty">
+        <h2>No reports yet</h2>
+        <p>
+          Generating one takes a couple of minutes. The agent in this cluster reads the day's
+          Jira queues and community issues, decides who owes the next move on each, and drafts
+          the comment to send.
+        </p>
+        <ol class="idr__steps">
+          <li><strong>Generate</strong> — you supply a Jira and a GitHub token for the run.</li>
+          <li><strong>Watch it work</strong> — the row shows each step as it happens.</li>
+          <li><strong>Open the report</strong> — act on it, copying the drafted comments.</li>
+        </ol>
+      </section>
+    </template>
 
-    <ul v-else class="idr__list">
-      <li
-        v-for="report in reports"
-        :key="report.id"
-        class="idr__row"
-        :class="{ 'is-open': report.status === 'complete', 'is-running': report.status === 'running' }"
-        :style="{ '--row-color': `var(${ statusStyle(report.status).colorVar })` }"
-        data-testid="idr-report-row"
-      >
-        <button
-          type="button"
-          class="idr__open"
-          :disabled="report.status !== 'complete'"
-          @click="open(report)"
-        >
-          <div class="idr__row-main">
-            <div class="idr__row-date">
-              <span class="idr__date">{{ report.reportDate }}</span>
-              <span class="idr__status">
-                <i
-                  v-if="report.status === 'running'"
-                  class="icon icon-spinner icon-spin"
-                />
-                {{ statusStyle(report.status).label }}
-              </span>
-            </div>
+    <template v-else>
+      <div class="idr__toolbar">
+        <TrendTile v-if="trend.length > 1" :points="trend" />
 
-            <p v-if="report.headline" class="idr__headline">
-              {{ report.headline }}
-            </p>
-            <p v-else-if="report.status === 'running'" class="idr__headline idr__headline--muted">
-              Gathering the day's Jira and GitHub state, then writing the report…
-            </p>
-            <p v-else-if="report.error" class="idr__headline idr__headline--error">
-              {{ report.error }}
-            </p>
-
-            <ul v-if="report.counts" class="idr__chips">
-              <li v-if="report.actNow" class="is-act-now">
-                <strong>{{ report.actNow }}</strong> act now
-              </li>
-              <li v-for="chip in countChips(report)" :key="chip.label" :class="{ 'is-zero': !chip.value }">
-                <strong>{{ chip.value }}</strong> {{ chip.label.toLowerCase() }}
-              </li>
-            </ul>
-
-            <ul v-if="report.top3 && report.top3.length" class="idr__top">
-              <li v-for="top in report.top3" :key="top.ref">
-                {{ top.ref }}
-              </li>
-            </ul>
-
-            <pre v-if="report.status === 'running' && activity && activeRun && activeRun.id === report.id" class="idr__activity">{{ activity }}</pre>
-          </div>
-
-          <div class="idr__row-meta">
-            <span>{{ whenLabel(report.startedAt) }}</span>
-            <span class="idr__elapsed">{{ elapsedLabel(report) }}</span>
-            <span v-if="report.startedBy" class="idr__by">{{ report.startedBy }}</span>
-          </div>
-        </button>
-
-        <div class="idr__row-side">
-          <i v-if="report.status === 'complete'" class="icon icon-chevron-right idr__chevron" />
-
-          <template v-if="confirmingDelete === report.id">
-            <button
-              type="button"
-              class="btn btn-sm role-secondary"
-              :disabled="deleting === report.id"
-              @click.stop="confirmingDelete = null"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              class="btn btn-sm bg-error"
-              :disabled="deleting === report.id"
-              data-testid="idr-delete-confirm"
-              @click.stop="remove(report)"
-            >
-              {{ deleting === report.id ? 'Deleting…' : 'Delete' }}
-            </button>
-          </template>
-          <button
-            v-else
-            type="button"
-            class="idr__delete"
-            title="Delete this report"
-            data-testid="idr-delete"
-            @click.stop="confirmingDelete = report.id"
+        <label class="idr__search">
+          <i class="icon icon-search" />
+          <input
+            ref="searchBox"
+            v-model="query"
+            type="search"
+            placeholder="Search by date, ticket or summary…"
+            aria-label="Search reports"
+            data-testid="idr-search"
           >
-            <i class="icon icon-delete" />
+          <kbd v-if="!query">/</kbd>
+          <button v-else type="button" class="idr__search-clear" aria-label="Clear the search" @click="query = ''">
+            <i class="icon icon-close" />
           </button>
-        </div>
-      </li>
-    </ul>
+        </label>
+      </div>
+
+      <p v-if="query && !matching.length" class="idr__nomatch">
+        No report matches “{{ query }}”.
+      </p>
+
+      <section v-for="group in groups" :key="group.name" class="idr__group">
+        <h2 class="idr__group-title">
+          {{ group.name }}
+          <span class="idr__group-count">{{ group.reports.length }}</span>
+        </h2>
+        <ul class="idr__list">
+          <ReportRow
+            v-for="report in group.reports"
+            :key="report.id"
+            :meta="report"
+            :progress="activeRun && activeRun.id === report.id ? progress : null"
+            :deleting="deleting === report.id"
+            :confirming="confirmingDelete === report.id"
+            @open="open"
+            @confirm-delete="confirmingDelete = $event"
+            @delete="remove"
+          />
+        </ul>
+      </section>
+
+      <p class="idr__foot">
+        <span v-if="agents.state === 'ready'" class="idr__agents">
+          <i class="icon icon-checkmark" />
+          Agents {{ agents.version }} · pod {{ agents.pod }}
+        </span>
+        <span>Keeping the newest {{ MAX_REPORTS }} reports.</span>
+      </p>
+    </template>
 
     <CredentialsDialog
       v-if="askingForTokens"
@@ -436,18 +479,22 @@ function open(meta: ReportMeta) {
     justify-content: space-between;
     gap: 24px;
     flex-wrap: wrap;
-    margin-bottom: 18px;
+    margin-bottom: 16px;
+  }
+
+  &__titles {
+    min-width: 0;
   }
 
   &__title {
-    margin: 0 0 6px;
-    font-size: 24px;
+    margin: 0 0 4px;
+    font-size: 22px;
     font-weight: 600;
   }
 
   &__lede {
     margin: 0;
-    max-width: 62ch;
+    max-width: 66ch;
     color: var(--muted);
     font-size: 13px;
     line-height: 19px;
@@ -455,15 +502,8 @@ function open(meta: ReportMeta) {
 
   &__actions {
     display: flex;
-    gap: 10px;
-    flex-shrink: 0;
-  }
-
-  &__ready {
-    display: flex;
-    align-items: center;
     gap: 8px;
-    font-size: 12px;
+    flex-shrink: 0;
   }
 
   &__loading {
@@ -475,226 +515,164 @@ function open(meta: ReportMeta) {
   }
 
   &__empty {
-    margin: 24px 0 0;
-    padding: 28px;
+    margin: 24px auto 0;
+    max-width: 560px;
+    padding: 28px 32px;
     border: 1px dashed var(--border);
     border-radius: 8px;
-    text-align: center;
+
+    h2 {
+      margin: 0 0 8px;
+      font-size: 17px;
+      font-weight: 600;
+    }
+
+    p {
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 20px;
+    }
+  }
+
+  &__steps {
+    margin: 0;
+    padding-left: 20px;
+    font-size: 13px;
+    line-height: 22px;
     color: var(--muted);
+
+    strong {
+      color: var(--body-text);
+    }
   }
 
-  &__list {
-    margin: 18px 0 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  &__row {
+  &__toolbar {
     display: flex;
-    align-items: stretch;
-    gap: 6px;
-    margin-bottom: 10px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+  }
+
+  &__search {
+    position: relative;
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 220px;
+    max-width: 380px;
     border: 1px solid var(--border);
-    border-left: 4px solid var(--row-color);
-    border-radius: 7px;
-    background: var(--body-bg);
-    overflow: hidden;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    border-radius: 6px;
+    background: var(--input-bg);
+    padding: 0 10px;
 
-    &.is-open:hover {
+    &:focus-within {
       border-color: var(--link);
-      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+    }
 
-      .idr__chevron {
-        color: var(--link);
-        transform: translateX(3px);
+    > .icon {
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    input {
+      flex: 1;
+      min-width: 0;
+      border: none;
+      outline: none;
+      background: transparent;
+      color: var(--input-text);
+      font-size: 13px;
+      padding: 7px 8px;
+
+      // Safari draws its own clear button on type=search, beside ours.
+      &::-webkit-search-cancel-button {
+        display: none;
       }
     }
 
-    // A run in flight reads as alive without moving anything a person is trying to click.
-    &.is-running {
-      animation: idr-pulse 2.4s ease-in-out infinite;
+    kbd {
+      font-family: var(--font-family-mono, monospace);
+      font-size: 10px;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 0 5px;
+      line-height: 15px;
     }
   }
 
-  &__open {
-    flex: 1;
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 20px;
-    min-width: 0;
-    padding: 14px 8px 14px 16px;
+  &__search-clear {
     border: none;
     background: transparent;
-    color: inherit;
-    text-align: left;
-    font: inherit;
+    color: var(--muted);
     cursor: pointer;
+    padding: 2px;
 
-    &:disabled {
-      cursor: default;
+    &:hover {
+      color: var(--body-text);
     }
   }
 
-  &__row-main {
-    min-width: 0;
-    flex: 1;
-  }
-
-  &__row-date {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-  }
-
-  &__date {
-    font-size: 17px;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-  }
-
-  &__status {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--row-color);
-  }
-
-  &__headline {
-    margin: 5px 0 0;
+  &__nomatch {
+    margin: 0 0 16px;
+    padding: 18px;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    color: var(--muted);
     font-size: 13px;
-    line-height: 19px;
-
-    &--muted {
-      color: var(--muted);
-    }
-
-    &--error {
-      color: var(--error);
-    }
+    text-align: center;
   }
 
-  &__chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin: 9px 0 0;
-    padding: 0;
-    list-style: none;
-
-    li {
-      padding: 2px 9px;
-      border-radius: 4px;
-      background: var(--nav-bg);
-      font-size: 11px;
-      color: var(--muted);
-
-      strong {
-        color: var(--body-text);
-        font-variant-numeric: tabular-nums;
-      }
-
-      &.is-zero {
-        opacity: 0.5;
-      }
-
-      &.is-act-now {
-        background: var(--error);
-        color: var(--body-bg);
-
-        strong {
-          color: var(--body-bg);
-        }
-      }
-    }
+  &__group {
+    margin-bottom: 20px;
   }
 
-  &__top {
+  &__group-title {
     display: flex;
-    flex-wrap: wrap;
+    align-items: center;
     gap: 8px;
-    margin: 8px 0 0;
-    padding: 0;
-    list-style: none;
-
-    li {
-      font-family: var(--font-family-mono, monospace);
-      font-size: 11px;
-      color: var(--muted);
-
-      &::before {
-        content: '★ ';
-      }
-    }
-  }
-
-  &__activity {
-    margin: 10px 0 0;
-    padding: 8px 10px;
-    max-height: 62px;
-    overflow: hidden;
-    border-radius: 4px;
-    background: var(--nav-bg);
-    color: var(--muted);
-    font-family: var(--font-family-mono, monospace);
+    margin: 0 0 8px;
     font-size: 11px;
-    line-height: 16px;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  &__row-meta {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 2px;
-    flex-shrink: 0;
-    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
     color: var(--muted);
-    white-space: nowrap;
   }
 
-  &__elapsed,
-  &__by {
-    font-variant-numeric: tabular-nums;
+  &__group-count {
+    font-weight: 600;
+    letter-spacing: 0;
     opacity: 0.8;
   }
 
-  &__row-side {
+  &__list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  &__foot {
     display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
+    margin: 24px 0 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  &__agents {
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 0 12px 0 4px;
-    flex-shrink: 0;
-  }
+    gap: 5px;
 
-  &__chevron {
-    color: var(--muted);
-    transition: transform 0.15s ease, color 0.15s ease;
-  }
-
-  &__delete {
-    border: none;
-    background: transparent;
-    color: var(--muted);
-    cursor: pointer;
-    padding: 6px;
-    border-radius: 4px;
-
-    &:hover {
-      color: var(--error);
-      background: var(--nav-bg);
+    .icon {
+      color: var(--success);
     }
   }
-}
-
-@keyframes idr-pulse {
-  0%, 100% { border-left-color: var(--row-color); }
-  50% { border-left-color: var(--border); }
 }
 </style>

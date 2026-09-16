@@ -152,6 +152,77 @@ export function isStale(meta: ReportMeta, now = Date.now()): boolean {
   return !Number.isNaN(started) && now - started > STALE_AFTER_MS;
 }
 
+/** The phase labels, in the order a run passes through them. */
+export const PHASE_LABEL: Record<string, string> = {
+  starting:   'Starting the agent',
+  gathering:  'Reading Jira and GitHub',
+  analysing:  'Writing the report',
+  publishing: 'Storing it in the cluster',
+};
+
+/**
+ * Which day a report belongs under in the list.
+ *
+ * Grouped rather than listed flat because a hundred rows all headed by a date is a hundred rows
+ * that look identical; what somebody scanning wants first is whether there is one for today.
+ * Compared on the calendar date the report is *for*, which is UTC, against the reader's own
+ * today - a report generated at 01:00 local is still yesterday's report to the person reading
+ * it, and saying otherwise would be a lie told by a timezone.
+ */
+export type DayGroup = 'Today' | 'Yesterday' | 'This week' | 'Earlier';
+
+export function dayGroup(reportDate: string, now = new Date()): DayGroup {
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const parsed = Date.parse(`${ reportDate }T00:00:00Z`);
+
+  if (Number.isNaN(parsed)) {
+    return 'Earlier';
+  }
+
+  const days = Math.round((today.getTime() - parsed) / 86400000);
+
+  if (days <= 0) {
+    return 'Today';
+  }
+  if (days === 1) {
+    return 'Yesterday';
+  }
+
+  return days <= 7 ? 'This week' : 'Earlier';
+}
+
+export const DAY_GROUP_ORDER: DayGroup[] = ['Today', 'Yesterday', 'This week', 'Earlier'];
+
+/**
+ * Everything a row can be searched by, lowercased.
+ *
+ * The refs matter as much as the date: "was SURE-11670 on a report last week" is the question
+ * somebody actually has, and it is unanswerable if search only reads the headline.
+ */
+export function searchText(meta: ReportMeta): string {
+  return [
+    meta.reportDate,
+    meta.headline || '',
+    meta.error || '',
+    meta.startedBy || '',
+    ...(meta.top3 || []).flatMap((t) => [t.ref, t.title]),
+  ].join(' ').toLowerCase();
+}
+
+/**
+ * The trend of how much was owed on each of the last reports, oldest first.
+ *
+ * Only complete reports: a run that failed has no count, and a gap drawn as zero would read as
+ * a quiet day rather than a missing one.
+ */
+export function actNowTrend(reports: ReportMeta[], points = 12): { date: string; value: number }[] {
+  return reports
+    .filter((r) => r.status === 'complete' && typeof r.actNow === 'number')
+    .slice(0, points)
+    .reverse()
+    .map((r) => ({ date: r.reportDate, value: r.actNow as number }));
+}
+
 /** The count chips on a list row, in the order the report itself puts them. */
 export function countChips(meta: ReportMeta): { label: string; value: number }[] {
   const counts = meta.counts;

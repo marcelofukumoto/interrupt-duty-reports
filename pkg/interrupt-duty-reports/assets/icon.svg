@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none">
+  <!-- The catalog icon: the same mark as nav-icon.svg, in the colours it is allowed here. -->
+  <rect width="64" height="64" rx="14" fill="#16243B"/>
+  <mask id="badge-cut">
+    <rect width="64" height="64" fill="#fff"/>
+    <circle cx="46" cy="18" r="12.5" fill="#000"/>
+  </mask>
+  <g mask="url(#badge-cut)">
+    <rect x="12" y="13" width="34" height="38" rx="6" stroke="#FFFFFF" stroke-width="3.6"/>
+    <path d="M20 25h18M20 32h18M20 39h10.5" stroke="#FFFFFF" stroke-width="3.4" stroke-linecap="round"/>
+  </g>
+  <circle cx="46" cy="18" r="8" fill="#E2574C"/>
+</svg>

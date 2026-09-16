@@ -1,20 +1,40 @@
 <script setup lang="ts">
 // One report, opened. What the markdown file used to be, read as a page instead of scrolled.
 //
-// The panel fetches its own payload rather than being handed one, because the list only ever
-// holds summaries - a hundred rows of dates must not mean a hundred reports downloaded. It is
-// opened wide (73% of the viewport) since every item carries a paragraph of explanation and a
-// draft comment, and a third of a screen turns each of those into a column of single words.
-import { computed, onMounted, ref } from 'vue';
+// Three things the flat version could not do, and this one is shaped around:
+//
+//   - filter by class. On a busy day this is thirty items, and the reader is almost always
+//     after one subset of them - usually "what needs a move today". Reading past the rest to
+//     find those is the work the report was supposed to save.
+//   - see what is new. A ticket on the list for the first time is a new obligation; one on it
+//     for the second day running is the queue not moving. Neither is visible when every item
+//     looks the same, so the previous report is fetched and the difference marked.
+//   - keep its bearings. The header and the filters stay put while the body scrolls, so the
+//     counts and the way back to the top are never a scroll away.
+//
+// The payload is fetched here rather than handed in, because the list only ever holds
+// summaries - a hundred rows of dates must not mean a hundred reports downloaded.
+import {
+  computed, nextTick, onBeforeUnmount, onMounted, ref,
+} from 'vue';
 import { Banner } from '@components/Banner';
 import ItemCard from './ItemCard.vue';
 import CopyButton from './CopyButton.vue';
 import { getReport } from '../lib/store';
-import { ageLabel, classStyle, whenLabel } from '../lib/format';
-import type { GitHubItem, JiraItem, QuestionItem, Report, ReportMeta } from '../types';
+import { computeDelta, itemRef } from '../lib/delta';
+import type { ReportDelta } from '../lib/delta';
+import {
+  ageLabel, classStyle, CLASS_ORDER, whenLabel,
+} from '../lib/format';
+import type {
+  GitHubItem, ItemClass, JiraItem, QuestionItem, Report, ReportMeta,
+} from '../types';
 
 const props = defineProps<{
   meta: ReportMeta;
+  /** The report before this one, for the difference between them. Absent for the first ever. */
+  previousId?: string;
+  previousDate?: string;
   /**
    * The slide-in's own configuration, declared so that it is consumed rather than inherited.
    *
@@ -27,8 +47,42 @@ const props = defineProps<{
 }>();
 
 const report = ref<Report | null>(null);
+const delta = ref<ReportDelta | null>(null);
 const error = ref('');
 const loading = ref(true);
+const activeClass = ref<ItemClass | 'ALL'>('ALL');
+const body = ref<HTMLElement | null>(null);
+const root = ref<HTMLElement | null>(null);
+const stickyEl = ref<HTMLElement | null>(null);
+/**
+ * Whether the header has given up its explanatory half.
+ *
+ * Everything in the header earns its place on arrival - what this report is, when it ran, the
+ * headline, what changed since yesterday - and none of it earns a third of the panel for the
+ * next twenty items. So once the body is scrolling, the header keeps only what is still being
+ * used: which report this is, the filters, and the way back to a section.
+ */
+const condensed = ref(false);
+
+let scroller: HTMLElement | null = null;
+
+function onScroll() {
+  condensed.value = (scroller?.scrollTop || 0) > 48;
+}
+
+/** The slide-in owns the scroll container, so it is found rather than declared. */
+function findScroller(from: HTMLElement | null): HTMLElement | null {
+  let node = from?.parentElement || null;
+
+  while (node && node !== document.body) {
+    if (node.scrollHeight > node.clientHeight + 8 && /auto|scroll/.test(getComputedStyle(node).overflowY)) {
+      return node;
+    }
+    node = node.parentElement;
+  }
+
+  return null;
+}
 
 onMounted(async() => {
   try {
@@ -44,9 +98,97 @@ onMounted(async() => {
   } finally {
     loading.value = false;
   }
+
+  // Once there is something to scroll, which is only true after the report has rendered.
+  await nextTick();
+  scroller = findScroller(root.value);
+  scroller?.addEventListener('scroll', onScroll, { passive: true });
+
+  // After the report and never blocking it: the difference is useful context, and a previous
+  // report that has since been deleted is a reason to show no badges, not an error.
+  if (report.value && props.previousId) {
+    const previous = await getReport(props.previousId).catch(() => null);
+
+    delta.value = computeDelta(report.value, previous, props.previousDate || '');
+  }
 });
 
-/** The four counts as tiles, so the shape of the day is read before anything is scrolled. */
+onBeforeUnmount(() => scroller?.removeEventListener('scroll', onScroll));
+
+const headline = computed(() => report.value?.reminder?.line || props.meta.headline || '');
+
+const jiraGroups = computed<{ key: string; title: string; note: string; items: JiraItem[] }[]>(() => {
+  const jira = report.value?.jira;
+
+  if (!jira) {
+    return [];
+  }
+
+  return [
+    {
+      key: 'new', title: 'Jira · New', note: 'Untriaged — we owe the first move.', items: jira.new || [],
+    },
+    {
+      key: 'in_triage', title: 'Jira · In triage', note: 'Being triaged — we owe a decision.', items: jira.in_triage || [],
+    },
+    {
+      key: 'waiting_reporter', title: 'Jira · Waiting for reporter', note: 'Every one is listed, even with nothing overdue.', items: jira.waiting_reporter || [],
+    },
+  ];
+});
+
+const issues = computed<GitHubItem[]>(() => report.value?.github?.issues || []);
+const questions = computed<QuestionItem[]>(() => report.value?.github?.questions || []);
+
+type AnyItem = JiraItem | GitHubItem | QuestionItem;
+
+/** Questions carry no class of their own; the report treats answering one as owed work. */
+function classOf(item: AnyItem): string {
+  return (item as JiraItem).class || 'ACT_NOW';
+}
+
+function keep(item: AnyItem): boolean {
+  return activeClass.value === 'ALL' || classOf(item) === activeClass.value;
+}
+
+/** The filter chips, each with how many items it would leave. */
+const classCounts = computed(() => {
+  const everything: AnyItem[] = [
+    ...jiraGroups.value.flatMap((g) => g.items),
+    ...issues.value,
+    ...questions.value,
+  ];
+  const counts = new Map<string, number>();
+
+  for (const item of everything) {
+    const name = classOf(item);
+
+    counts.set(name, (counts.get(name) || 0) + 1);
+  }
+
+  return {
+    total:   everything.length,
+    classes: CLASS_ORDER
+      .filter((name) => counts.get(name))
+      .map((name) => ({ name, count: counts.get(name) || 0, style: classStyle(name) })),
+  };
+});
+
+/** Every section, already filtered, so the nav counts and the body can never disagree. */
+const sections = computed(() => [
+  ...jiraGroups.value.map((group) => ({
+    key: group.key, title: group.title, note: group.note, kind: 'jira' as const, items: group.items.filter(keep), total: group.items.length,
+  })),
+  {
+    key: 'github', title: 'GitHub · Community issues', note: 'Opened in the last 30 days. Older issues belong to the backlog process.', kind: 'github' as const, items: issues.value.filter(keep), total: issues.value.length,
+  },
+  {
+    key: 'questions', title: 'GitHub · Open questions', note: 'Quick wins — answering one closes the loop.', kind: 'question' as const, items: questions.value.filter(keep), total: questions.value.length,
+  },
+]);
+
+const shown = computed(() => sections.value.reduce((n, s) => n + s.items.length, 0));
+
 const tiles = computed(() => {
   const counts = report.value?.reminder?.counts || props.meta.counts;
 
@@ -63,30 +205,9 @@ const tiles = computed(() => {
   ];
 });
 
-const headline = computed(() => report.value?.reminder?.line || props.meta.headline || '');
-
-const jiraGroups = computed<{ key: string; title: string; note: string; items: JiraItem[] }[]>(() => {
-  const jira = report.value?.jira;
-
-  if (!jira) {
-    return [];
-  }
-
-  return [
-    {
-      key: 'new', title: 'New', note: 'Untriaged — we owe the first move.', items: jira.new || [],
-    },
-    {
-      key: 'in_triage', title: 'In triage', note: 'Being triaged — we owe a decision.', items: jira.in_triage || [],
-    },
-    {
-      key: 'waiting_reporter', title: 'Waiting for reporter', note: 'Every one is listed, even with nothing overdue.', items: jira.waiting_reporter || [],
-    },
-  ];
-});
-
-const issues = computed<GitHubItem[]>(() => report.value?.github?.issues || []);
-const questions = computed<QuestionItem[]>(() => report.value?.github?.questions || []);
+function isFresh(item: AnyItem): boolean {
+  return !!delta.value?.fresh.has(itemRef(item));
+}
 
 function jiraChips(item: JiraItem) {
   return [
@@ -112,11 +233,47 @@ function questionChips(item: QuestionItem) {
   ];
 }
 
+function chipsFor(section: { kind: string }, item: AnyItem) {
+  if (section.kind === 'jira') {
+    return jiraChips(item as JiraItem);
+  }
+
+  return section.kind === 'github' ? issueChips(item as GitHubItem) : questionChips(item as QuestionItem);
+}
+
+/**
+ * Scroll a section to just under the header.
+ *
+ * Not `scrollIntoView`, and not a `scroll-margin-top` either, because the thing being cleared
+ * changes height: the header is in its tall form at the top of the panel and its short one
+ * everywhere else, so any fixed margin is wrong at one end or the other - and when it was too
+ * small the section title landed *behind* the header, which looked like the jump had missed.
+ *
+ * So the header is put into its scrolled form first - the panel is about to be scrolled away
+ * from the top regardless - and measured once it is, and the offset computed from that.
+ */
+async function jump(key: string) {
+  const section = body.value?.querySelector(`[data-section="${ key }"]`);
+
+  if (!section || !scroller) {
+    return;
+  }
+
+  condensed.value = true;
+  await nextTick();
+
+  const clearance = (stickyEl.value?.getBoundingClientRect().height || 0) + 12;
+  const offset = section.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
+
+  scroller.scrollTo({ top: scroller.scrollTop + offset - clearance, behavior: 'smooth' });
+}
+
 /**
  * The whole report as text, for pasting somewhere that is not this page.
  *
- * The reports used to be markdown files and were read in pull requests and in chat, so the one
- * thing the move to a UI must not take away is the ability to hand somebody the report.
+ * The reports used to be markdown files read in pull requests and in chat, so the one thing the
+ * move to a UI must not take away is the ability to hand somebody the report. It follows the
+ * filter: what you copy is what you are looking at.
  */
 const asText = computed(() => {
   const r = report.value;
@@ -131,47 +288,42 @@ const asText = computed(() => {
     lines.push(r.reminder.line, '');
   }
 
-  if (r.top3?.length) {
+  if (activeClass.value !== 'ALL') {
+    lines.push(`(filtered to ${ classStyle(activeClass.value).label })`, '');
+  }
+
+  if (activeClass.value === 'ALL' && r.top3?.length) {
     lines.push('Top 3:');
     r.top3.forEach((t, i) => lines.push(`  ${ i + 1 }. ${ t.ref } — ${ t.title }${ t.why ? ` (${ t.why })` : '' }`));
     lines.push('');
   }
 
-  const section = (title: string, items: { ref: string; title: string; next: string; comment?: string | null }[]) => {
-    if (!items.length) {
-      return;
+  for (const section of sections.value) {
+    if (!section.items.length) {
+      continue;
     }
-    lines.push(`## ${ title }`);
-    for (const item of items) {
-      lines.push(`- ${ item.ref } — ${ item.title }`);
-      lines.push(`  Next step: ${ item.next }`);
-      if (item.comment) {
-        lines.push(`  Suggested comment: ${ item.comment }`);
+
+    lines.push(`## ${ section.title }`);
+
+    for (const item of section.items) {
+      const step = (item as JiraItem).next_step;
+
+      lines.push(`- ${ itemRef(item) } — ${ item.title }${ isFresh(item) ? '  [new]' : '' }`);
+      lines.push(`  Next step: ${ step?.verb } — ${ step?.explanation }`);
+      if ((item as JiraItem).suggested_comment) {
+        lines.push(`  Suggested comment: ${ (item as JiraItem).suggested_comment }`);
       }
     }
+
     lines.push('');
-  };
-
-  for (const group of jiraGroups.value) {
-    section(`Jira — ${ group.title }`, group.items.map((i) => ({
-      ref: i.key, title: i.title, next: `${ i.next_step?.verb } — ${ i.next_step?.explanation }`, comment: i.suggested_comment,
-    })));
   }
-
-  section('GitHub — Community issues', issues.value.map((i) => ({
-    ref: `#${ i.number }`, title: i.title, next: `${ i.next_step?.verb } — ${ i.next_step?.explanation }`, comment: i.suggested_comment,
-  })));
-
-  section('GitHub — Open questions', questions.value.map((i) => ({
-    ref: `#${ i.number }`, title: i.title, next: `${ i.next_step?.verb } — ${ i.next_step?.explanation }`, comment: i.suggested_comment,
-  })));
 
   return lines.join('\n');
 });
 </script>
 
 <template>
-  <div class="panel">
+  <div ref="root" class="panel">
     <div v-if="loading" class="panel__loading">
       <i class="icon icon-spinner icon-spin" />
       <span>Opening the report…</span>
@@ -182,132 +334,152 @@ const asText = computed(() => {
     </Banner>
 
     <template v-else-if="report">
-      <header class="panel__head" data-testid="idr-report-panel">
-        <div>
-          <p class="panel__eyebrow">
-            Daily interrupt duty
-          </p>
-          <h2 class="panel__date">
-            {{ report.report_date }}
-          </h2>
-          <p v-if="headline" class="panel__headline">
-            {{ headline }}
-          </p>
-          <p class="panel__generated">
-            Generated {{ whenLabel(meta.finishedAt || meta.startedAt) }}
-            <template v-if="meta.startedBy"> · by {{ meta.startedBy }}</template>
-          </p>
-        </div>
-        <CopyButton :text="asText" label="Copy whole report" />
-      </header>
+      <!-- Sticky, so the counts and the filters are never a scroll away from the item you are reading. -->
+      <div ref="stickyEl" class="panel__sticky" :class="{ 'is-condensed': condensed }">
+        <header class="panel__head" data-testid="idr-report-panel">
+          <div class="panel__identity">
+            <p v-show="!condensed" class="panel__eyebrow">
+              Daily interrupt duty
+            </p>
+            <h2 class="panel__date">
+              {{ report.report_date }}
+            </h2>
+            <p v-show="!condensed" class="panel__generated">
+              Generated {{ whenLabel(meta.finishedAt || meta.startedAt) }}
+              <template v-if="meta.startedBy"> · by {{ meta.startedBy }}</template>
+            </p>
+          </div>
+          <CopyButton :text="asText" :label="activeClass === 'ALL' ? 'Copy whole report' : 'Copy what is shown'" />
+        </header>
 
-      <ul v-if="tiles.length" class="panel__tiles">
-        <li v-for="tile in tiles" :key="tile.label" :class="{ 'is-zero': !tile.value }">
-          <span class="panel__tile-value">{{ tile.value }}</span>
-          <span class="panel__tile-label">{{ tile.label }}</span>
-        </li>
-      </ul>
+        <p v-if="headline" v-show="!condensed" class="panel__headline">
+          {{ headline }}
+        </p>
 
-      <section v-if="report.top3 && report.top3.length" class="panel__top">
-        <h3 class="panel__section-title">
-          <i class="icon icon-star" />
-          Act on these first
-        </h3>
-        <ol class="panel__top-list">
-          <li
-            v-for="(top, index) in report.top3"
-            :key="top.ref"
-            :style="{ '--top-color': `var(${ classStyle(top.class).colorVar })` }"
+        <p v-if="delta" v-show="!condensed" class="panel__delta" data-testid="idr-delta">
+          <span v-if="delta.fresh.size" class="panel__delta-new">
+            <strong>{{ delta.fresh.size }}</strong> new since {{ delta.previousDate }}
+          </span>
+          <span v-else>Nothing new since {{ delta.previousDate }}</span>
+          <span v-if="delta.carried.size">· <strong>{{ delta.carried.size }}</strong> carried over</span>
+          <span v-if="delta.clearedCount">· <strong>{{ delta.clearedCount }}</strong> cleared</span>
+        </p>
+
+        <div class="panel__filters" role="group" aria-label="Filter items by class">
+          <button
+            type="button"
+            class="panel__chip"
+            :class="{ 'is-active': activeClass === 'ALL' }"
+            data-testid="idr-filter-all"
+            @click="activeClass = 'ALL'"
           >
-            <span class="panel__top-rank">{{ index + 1 }}</span>
-            <div class="panel__top-body">
-              <a :href="top.url" target="_blank" rel="noopener noreferrer" class="panel__top-ref">{{ top.ref }}</a>
-              <span v-if="top.meta" class="panel__top-meta">{{ top.meta }}</span>
-              <p class="panel__top-title">
-                {{ top.title }}
-              </p>
-              <p v-if="top.why" class="panel__top-why">
-                {{ top.why }}
-              </p>
-            </div>
+            All <span>{{ classCounts.total }}</span>
+          </button>
+          <button
+            v-for="entry in classCounts.classes"
+            :key="entry.name"
+            type="button"
+            class="panel__chip"
+            :class="{ 'is-active': activeClass === entry.name }"
+            :style="{ '--chip-color': `var(${ entry.style.colorVar })` }"
+            :title="entry.style.hint"
+            :data-testid="`idr-filter-${ entry.name }`"
+            @click="activeClass = activeClass === entry.name ? 'ALL' : entry.name"
+          >
+            <i class="icon" :class="entry.style.icon" />
+            {{ entry.style.label }} <span>{{ entry.count }}</span>
+          </button>
+        </div>
+
+        <nav class="panel__nav" aria-label="Jump to a section">
+          <button
+            v-for="section in sections"
+            :key="section.key"
+            type="button"
+            :disabled="!section.items.length"
+            @click="jump(section.key)"
+          >
+            {{ section.title.replace(' · ', ' ') }} <span>{{ section.items.length }}</span>
+          </button>
+        </nav>
+      </div>
+
+      <div ref="body" class="panel__body">
+        <ul v-if="tiles.length && activeClass === 'ALL'" class="panel__tiles">
+          <li v-for="tile in tiles" :key="tile.label" :class="{ 'is-zero': !tile.value }">
+            <span class="panel__tile-value">{{ tile.value }}</span>
+            <span class="panel__tile-label">{{ tile.label }}</span>
           </li>
-        </ol>
-      </section>
+        </ul>
 
-      <section v-for="group in jiraGroups" :key="group.key" class="panel__section">
-        <h3 class="panel__section-title">
-          Jira · {{ group.title }}
-          <span class="panel__count">{{ group.items.length }}</span>
-        </h3>
-        <p class="panel__section-note">
-          {{ group.note }}
-        </p>
-        <p v-if="!group.items.length" class="panel__empty">
-          Nothing in this queue today.
-        </p>
-        <ItemCard
-          v-for="item in group.items"
-          :key="item.key"
-          :reference="item.key"
-          :url="item.url"
-          :title="item.title"
-          :item-class="item.class"
-          :chips="jiraChips(item)"
-          :last-activity="item.last_activity"
-          :next-step="item.next_step"
-          :suggested-comment="item.suggested_comment"
-          :quick-action="item.quick_action"
-        />
-      </section>
+        <section v-if="activeClass === 'ALL' && report.top3 && report.top3.length" class="panel__top">
+          <h3 class="panel__section-title">
+            <i class="icon icon-star" />
+            Act on these first
+          </h3>
+          <ol class="panel__top-list">
+            <li
+              v-for="(top, index) in report.top3"
+              :key="top.ref"
+              :style="{ '--top-color': `var(${ classStyle(top.class).colorVar })` }"
+            >
+              <span class="panel__top-rank">{{ index + 1 }}</span>
+              <div class="panel__top-body">
+                <a :href="top.url" target="_blank" rel="noopener noreferrer" class="panel__top-ref">{{ top.ref }}</a>
+                <span v-if="top.meta" class="panel__top-meta">{{ top.meta }}</span>
+                <p class="panel__top-title">
+                  {{ top.title }}
+                </p>
+                <p v-if="top.why" class="panel__top-why">
+                  {{ top.why }}
+                </p>
+              </div>
+            </li>
+          </ol>
+        </section>
 
-      <section class="panel__section">
-        <h3 class="panel__section-title">
-          GitHub · Community issues
-          <span class="panel__count">{{ issues.length }}</span>
-        </h3>
-        <p class="panel__section-note">
-          Opened in the last 30 days. Older issues belong to the backlog process.
+        <p v-if="!shown" class="panel__empty">
+          Nothing in this report is
+          <strong>{{ activeClass === 'ALL' ? 'listed' : classStyle(activeClass).label.toLowerCase() }}</strong>.
+          <button type="button" class="panel__link" @click="activeClass = 'ALL'">
+            Show everything
+          </button>
         </p>
-        <p v-if="!issues.length" class="panel__empty">
-          No new community issues in the window.
-        </p>
-        <ItemCard
-          v-for="item in issues"
-          :key="item.number"
-          :reference="`#${ item.number }`"
-          :url="item.url"
-          :title="item.title"
-          :item-class="item.class"
-          :chips="issueChips(item)"
-          :linked-prs="item.linked_prs"
-          :next-step="item.next_step"
-          :suggested-comment="item.suggested_comment"
-        />
-      </section>
 
-      <section class="panel__section">
-        <h3 class="panel__section-title">
-          GitHub · Open questions
-          <span class="panel__count">{{ questions.length }}</span>
-        </h3>
-        <p class="panel__section-note">
-          Quick wins — answering one closes the loop.
-        </p>
-        <p v-if="!questions.length" class="panel__empty">
-          No open questions in the window.
-        </p>
-        <ItemCard
-          v-for="item in questions"
-          :key="item.number"
-          :reference="`#${ item.number }`"
-          :url="item.url"
-          :title="item.title"
-          item-class="ACT_NOW"
-          :chips="questionChips(item)"
-          :next-step="item.next_step"
-          :suggested-comment="item.suggested_comment"
-        />
-      </section>
+        <section
+          v-for="section in sections"
+          v-show="section.items.length"
+          :key="section.key"
+          class="panel__section"
+          :data-section="section.key"
+        >
+          <h3 class="panel__section-title">
+            {{ section.title }}
+            <span class="panel__count">
+              {{ section.items.length }}<template v-if="section.items.length !== section.total"> of {{ section.total }}</template>
+            </span>
+          </h3>
+          <p class="panel__section-note">
+            {{ section.note }}
+          </p>
+          <ItemCard
+            v-for="item in section.items"
+            :key="itemRef(item)"
+            :reference="itemRef(item)"
+            :url="item.url"
+            :title="item.title"
+            :item-class="section.kind === 'question' ? 'ACT_NOW' : (item as JiraItem).class"
+            :chips="chipsFor(section, item)"
+            :last-activity="section.kind === 'jira' ? (item as JiraItem).last_activity : null"
+            :linked-prs="section.kind === 'github' ? (item as GitHubItem).linked_prs : undefined"
+            :next-step="(item as JiraItem).next_step"
+            :suggested-comment="(item as JiraItem).suggested_comment"
+            :quick-action="section.kind === 'jira' ? (item as JiraItem).quick_action : null"
+            :is-new="isFresh(item)"
+            :new-since="delta?.previousDate"
+          />
+        </section>
+      </div>
     </template>
   </div>
 </template>
@@ -324,48 +496,176 @@ const asText = computed(() => {
     color: var(--muted);
   }
 
+  &__sticky {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding: 2px 0 10px;
+    background: var(--body-bg);
+    border-bottom: 1px solid var(--border);
+
+    &.is-condensed {
+      padding-bottom: 8px;
+      box-shadow: 0 4px 10px -6px rgba(0, 0, 0, 0.45);
+    }
+  }
+
   &__head {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
     gap: 20px;
-    padding-bottom: 18px;
-    border-bottom: 1px solid var(--border);
   }
 
   &__eyebrow {
     margin: 0;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.09em;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--muted);
   }
 
   &__date {
-    margin: 2px 0 6px;
-    font-size: 26px;
+    margin: 1px 0 3px;
+    font-size: 24px;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
+    transition: font-size 0.15s ease, margin 0.15s ease;
   }
 
-  &__headline {
-    margin: 0 0 4px;
-    font-size: 13px;
-    line-height: 19px;
+  &__sticky.is-condensed &__date {
+    font-size: 17px;
+    margin: 0;
+  }
+
+  &__sticky.is-condensed &__filters {
+    margin-top: 8px;
   }
 
   &__generated {
     margin: 0;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  &__headline {
+    margin: 10px 0 0;
+    font-size: 13px;
+    line-height: 19px;
+  }
+
+  &__delta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 6px 0 0;
     font-size: 12px;
     color: var(--muted);
+
+    strong {
+      color: var(--body-text);
+      font-variant-numeric: tabular-nums;
+    }
+  }
+
+  &__delta-new strong {
+    color: var(--warning);
+  }
+
+  &__filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 12px;
+  }
+
+  &__chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 13px;
+    border: 1px solid var(--border);
+    background: var(--body-bg);
+    color: var(--muted);
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 0.12s ease, color 0.12s ease, background-color 0.12s ease;
+
+    span {
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      color: var(--body-text);
+    }
+
+    .icon {
+      font-size: 12px;
+      color: var(--chip-color, var(--muted));
+    }
+
+    &:hover {
+      border-color: var(--chip-color, var(--link));
+      color: var(--body-text);
+    }
+
+    // The active chip is filled as well as coloured, so which filter is on does not rest on a
+    // border tint alone.
+    &.is-active {
+      background: var(--chip-color, var(--link));
+      border-color: var(--chip-color, var(--link));
+      color: var(--body-bg);
+
+      span,
+      .icon {
+        color: var(--body-bg);
+      }
+    }
+  }
+
+  &__nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin-top: 10px;
+
+    button {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 5px;
+      border: none;
+      background: transparent;
+      padding: 0;
+      font-size: 11px;
+      color: var(--link);
+      cursor: pointer;
+
+      span {
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+
+      &:hover:not(:disabled) {
+        text-decoration: underline;
+      }
+
+      &:disabled {
+        color: var(--muted);
+        opacity: 0.5;
+        cursor: default;
+      }
+    }
+  }
+
+  &__body {
+    padding-top: 18px;
   }
 
   &__tiles {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
     gap: 10px;
-    margin: 18px 0 8px;
+    margin: 0 0 8px;
     padding: 0;
     list-style: none;
 
@@ -383,10 +683,9 @@ const asText = computed(() => {
 
   &__tile-value {
     display: block;
-    font-size: 26px;
+    font-size: 24px;
     font-weight: 600;
-    line-height: 30px;
-    font-variant-numeric: tabular-nums;
+    line-height: 28px;
   }
 
   &__tile-label {
@@ -399,11 +698,11 @@ const asText = computed(() => {
   }
 
   &__section {
-    margin-top: 30px;
+    margin-top: 28px;
   }
 
   &__top {
-    margin-top: 26px;
+    margin-top: 24px;
   }
 
   &__section-title {
@@ -411,7 +710,7 @@ const asText = computed(() => {
     align-items: center;
     gap: 9px;
     margin: 0 0 4px;
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 600;
   }
 
@@ -420,7 +719,7 @@ const asText = computed(() => {
     border-radius: 11px;
     background: var(--nav-bg);
     border: 1px solid var(--border);
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
   }
@@ -432,12 +731,30 @@ const asText = computed(() => {
   }
 
   &__empty {
-    margin: 0 0 12px;
-    padding: 14px 16px;
+    margin: 20px 0;
+    padding: 24px;
     border: 1px dashed var(--border);
     border-radius: 6px;
     color: var(--muted);
     font-size: 13px;
+    text-align: center;
+
+    strong {
+      color: var(--body-text);
+    }
+  }
+
+  &__link {
+    border: none;
+    background: transparent;
+    color: var(--link);
+    font-size: 13px;
+    cursor: pointer;
+    padding: 0 0 0 4px;
+
+    &:hover {
+      text-decoration: underline;
+    }
   }
 
   &__top-list {
@@ -459,15 +776,15 @@ const asText = computed(() => {
 
   &__top-rank {
     flex-shrink: 0;
-    width: 30px;
-    height: 30px;
+    width: 28px;
+    height: 28px;
     display: grid;
     place-items: center;
     border-radius: 50%;
     background: var(--top-color);
     color: var(--body-bg);
     font-weight: 700;
-    font-size: 14px;
+    font-size: 13px;
   }
 
   &__top-body {

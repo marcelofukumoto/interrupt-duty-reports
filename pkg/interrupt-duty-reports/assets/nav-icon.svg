@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none">
+  <!--
+    A report with an alert on it, which is what this product is: a list of daily reports whose
+    headline number is how many things need a move today.
+
+    One colour and nothing else, because Rancher renders a product's svg through an <img> and
+    recolours it with a generated CSS filter (shell's IconOrSvg) that assumes a single colour to
+    filter from - two colours come out mangled. The badge is therefore separated from the
+    document by a cut in the document itself rather than by a ring of some other colour, which
+    is also what lets the document fill the box instead of shrinking to make room.
+  -->
+  <mask id="badge-cut">
+    <rect width="24" height="24" fill="#fff"/>
+    <circle cx="18.4" cy="5.4" r="5.3" fill="#000"/>
+  </mask>
+  <g mask="url(#badge-cut)">
+    <rect x="2.4" y="3.6" width="15" height="17" rx="2.6" stroke="#000" stroke-width="1.8"/>
+    <path d="M5.9 9.2h8.1M5.9 12.8h8.1M5.9 16.4h4.7" stroke="#000" stroke-width="1.7" stroke-linecap="round"/>
+  </g>
+  <circle cx="18.4" cy="5.4" r="3.4" fill="#000"/>
+</svg>
