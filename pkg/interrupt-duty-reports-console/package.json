@@ -1,9 +1,9 @@
 {
-  "name": "interrupt-duty-reports",
+  "name": "interrupt-duty-reports-console",
   "description": "The Rancher UI team's daily interrupt-duty report, generated in-cluster by the Agents extension and kept as ConfigMaps",
-  "version": "0.9.2",
+  "version": "0.10.0",
   "private": false,
-  "homepage": "https://github.com/marcelofukumoto/interrupt-duty-reports",
+  "homepage": "https://github.com/marcelofukumoto/interrupt-duty-reports-console",
   "rancher": {
     "annotations": {
       "catalog.cattle.io/display-name": "Interrupt Duty Reports",
@@ -25,5 +25,5 @@
     "last 2 versions",
     "not dead"
   ],
-  "icon": "https://marcelofukumoto.github.io/interrupt-duty-reports/icon.svg"
+  "icon": "https://marcelofukumoto.github.io/interrupt-duty-reports-console/icon.svg"
 }

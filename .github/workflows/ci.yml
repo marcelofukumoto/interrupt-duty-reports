@@ -24,6 +24,6 @@ jobs:
       - name: seed.generated.ts is up to date
         run: |
           yarn gen-seed
-          git diff --exit-code -- pkg/interrupt-duty-reports/seed.generated.ts \
+          git diff --exit-code -- pkg/interrupt-duty-reports-console/seed.generated.ts \
             || { echo "::error::seed.generated.ts is stale - run 'yarn gen-seed' and commit it"; exit 1; }
-      - run: yarn build-pkg interrupt-duty-reports
+      - run: yarn build-pkg interrupt-duty-reports-console

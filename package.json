@@ -1,5 +1,5 @@
 {
-  "name": "interrupt-duty-reports",
+  "name": "interrupt-duty-reports-console",
   "version": "0.1.0",
   "private": false,
   "engines": {
@@ -22,7 +22,7 @@
     "publish-pkgs": "./node_modules/@rancher/shell/scripts/extension/publish",
     "parse-tag-name": "./node_modules/@rancher/shell/scripts/extension/parse-tag-name",
     "lint": "eslint pkg scripts",
-    "type-check": "tsc --noEmit --skipLibCheck --strict --target ES2020 --module ESNext --moduleResolution node --lib ESNext,DOM --esModuleInterop pkg/interrupt-duty-reports/lib/*.ts pkg/interrupt-duty-reports/types.ts"
+    "type-check": "tsc --noEmit --skipLibCheck --strict --target ES2020 --module ESNext --moduleResolution node --lib ESNext,DOM --esModuleInterop pkg/interrupt-duty-reports-console/lib/*.ts pkg/interrupt-duty-reports-console/types.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

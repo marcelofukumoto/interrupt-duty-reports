@@ -15,7 +15,7 @@
       "@/*": ["./*"],
       "@shell/*": ["./node_modules/@rancher/shell/*"],
       "@components/*": ["./node_modules/@rancher/shell/rancher-components/*"],
-      "@pkg/*": ["./pkg/interrupt-duty-reports/*"]
+      "@pkg/*": ["./pkg/interrupt-duty-reports-console/*"]
     },
     "typeRoots": ["./node_modules", "./node_modules/@rancher/shell/types"],
     "types": ["@types/node", "rancher", "shell"]

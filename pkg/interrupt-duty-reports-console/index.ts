@@ -12,7 +12,7 @@ export default function(plugin: IPlugin): void {
   plugin.metadata = require('./package.json');
 
   plugin.addProduct({
-    name:  'interrupt-duty-reports',
+    name:  'interrupt-duty-reports-console',
     label: 'Interrupt Duty',
     // A data URI rather than a required file. Rancher renders this through an <img> and a built
     // extension is served from a path chosen by whoever installed it, so an emitted asset's URL

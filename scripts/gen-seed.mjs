@@ -21,7 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const PKG = path.join(here, '..', 'pkg', 'interrupt-duty-reports');
+const PKG = path.join(here, '..', 'pkg', 'interrupt-duty-reports-console');
 const SEED = path.join(PKG, 'seed');
 const ASSETS = path.join(PKG, 'assets');
 

@@ -1,4 +1,4 @@
-# interrupt-duty-reports
+# interrupt-duty-reports-console
 
 The Rancher UI team's **daily interrupt-duty report**, as a Rancher UI extension.
 
@@ -190,7 +190,7 @@ end the session out from under it.
 
 ## The report specification
 
-[`pkg/interrupt-duty-reports/seed/daily-report.prompt.md`](pkg/interrupt-duty-reports/seed/daily-report.prompt.md)
+[`pkg/interrupt-duty-reports-console/seed/daily-report.prompt.md`](pkg/interrupt-duty-reports-console/seed/daily-report.prompt.md)
 is the single source of truth for what a report *is*: the four classes, the "who has the ball"
 rules, the readiness gate for opening a GitHub issue, the next-step verbs, the suggested
 comments, and the exact JSON shape. It is the team's existing daily-report prompt with its
@@ -202,7 +202,7 @@ is decided in a Vue component.
 
 ## Storage layout
 
-Two ConfigMaps per report, in the `interrupt-duty-reports` namespace:
+Two ConfigMaps per report, in the `interrupt-duty-reports-console` namespace:
 
 | Name | Label `interrupt-duty.rancher.io/report` | Holds |
 | --- | --- | --- |
@@ -220,7 +220,7 @@ yarn install
 yarn gen-seed           # after editing anything under pkg/*/seed or pkg/*/assets
 yarn lint
 yarn type-check
-yarn build-pkg interrupt-duty-reports
+yarn build-pkg interrupt-duty-reports-console
 ```
 
 `seed.generated.ts` and `icon.generated.ts` are committed, so a normal build never runs
@@ -244,7 +244,7 @@ Both draw the same mark — a report with an alert on it — so the two read as 
 In Rancher, go to **Apps → Repositories**, add an `http(s)` repository pointing at
 
 ```
-https://marcelofukumoto.github.io/interrupt-duty-reports/
+https://marcelofukumoto.github.io/interrupt-duty-reports-console/
 ```
 
 then open **Extensions** and install **Interrupt Duty Reports**. Install
@@ -252,7 +252,7 @@ then open **Extensions** and install **Interrupt Duty Reports**. Install
 
 ## Publishing
 
-Pushing a change to `pkg/interrupt-duty-reports/package.json`'s `version` on `main` builds the
+Pushing a change to `pkg/interrupt-duty-reports-console/package.json`'s `version` on `main` builds the
 extension and publishes it to the `gh-pages` branch as a Helm repository, using
 `rancher/dashboard`'s own reusable workflow. The version is the whole of publishing — a chart
 version is meant to be immutable, so a push that does not change it republishes nothing.
