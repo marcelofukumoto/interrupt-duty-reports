@@ -17,18 +17,17 @@ import { Banner } from '@components/Banner';
 import ButtonGroup from '@shell/components/ButtonGroup';
 import CalendarGrid from '../components/CalendarGrid.vue';
 import CredentialsDialog from '../components/CredentialsDialog.vue';
-import AgentSessionPanel from '../components/AgentSessionPanel.vue';
 import ReportPanel from '../components/ReportPanel.vue';
 import ReportRow from '../components/ReportRow.vue';
 import RunProgress from '../components/RunProgress.vue';
 import TrendTile from '../components/TrendTile.vue';
-import { agentsStatus, whenAgentsReady } from '../lib/agents';
+import { agentsStatus, openAgentDrawer, whenAgentsReady } from '../lib/agents';
 import type { AgentsStatus } from '../lib/agents';
 import {
   deleteReport, listReports, MAX_REPORTS, pruneToCap, setStatus,
 } from '../lib/store';
 import {
-  runPhase, startRun, stopRun, sweepFinishedRuns, sweepRunDirectories,
+  endSessions, runPhase, startRun, stopRun, sweepRunDirectories,
 } from '../lib/run';
 import type { RunPhase } from '../lib/run';
 import {
@@ -52,13 +51,13 @@ const starting = ref(false);
 const stopping = ref(false);
 const phase = ref<RunPhase>('starting');
 /**
- * The conversation whose terminal is open in this tab, if any.
+ * Said when the drawer opened but could not be pointed at the right tab.
  *
- * Held so the sweep leaves it alone. A run's conversation is ended the moment the run stops
- * being in flight, and doing that while somebody is reading the transcript would take it off
- * the screen mid-sentence.
+ * Which happens when the drawer had to be built from scratch by the chord: it exists a moment
+ * later than the request to select a tab in it. The conversation is in the strip either way, and
+ * named for its date, so this is a nudge rather than an error.
  */
-const watchedSession = ref<string | null>(null);
+const drawerHint = ref('');
 const query = ref('');
 const searchBox = ref<HTMLInputElement | null>(null);
 /** The tab's memory of the two tokens, so a second report in one sitting is one click. */
@@ -208,23 +207,22 @@ async function refresh() {
  */
 async function sweep() {
   const now = Date.now();
-  const keep = reports.value
+  // Only this extension's own conversations, and only the ones whose run is well and truly
+  // over: these are ordinary drawer conversations now, sitting in the same strip as somebody's
+  // own work, so the set is built from what was recorded rather than from what is in the pod.
+  const stale = reports.value
     .filter((report) => {
-      if (report.status === 'running') {
-        return true;
+      if (report.status === 'running' || !report.session) {
+        return false;
       }
 
       const finished = Date.parse(report.finishedAt || '');
 
-      return !Number.isNaN(finished) && now - finished < SESSION_GRACE_MS;
+      return !Number.isNaN(finished) && now - finished >= SESSION_GRACE_MS;
     })
     .map((report) => report.session || '');
 
-  // This tab's open panel as well, so a conversation being read past the grace window is not
-  // closed mid-sentence by this tab at least.
-  keep.push(watchedSession.value || '');
-
-  await sweepFinishedRuns(keep).catch(() => undefined);
+  await endSessions(stale).catch(() => undefined);
   await sweepRunDirectories(reports.value.map((r) => r.id)).catch(() => undefined);
 }
 
@@ -384,19 +382,30 @@ async function remove(meta: ReportMeta) {
 }
 
 /**
- * Open the run's conversation, as the agents extension's own terminal.
+ * Show the run in the agents drawer.
  *
- * Not its drawer: that lists `agent-<n>` only, and every run here is a project conversation,
- * which it excludes by design so a workspace's chatter never fills the global strip. Placing the
- * pane is the way in that extension offers instead - so the pane is placed here.
+ * The drawer rather than a terminal of our own, because that is where agent conversations
+ * already are: a second pane here would be a second place to look for the same thing. A run is
+ * an ordinary drawer conversation for exactly this reason, and it is named for its date so it is
+ * findable in the strip whether or not it could be selected outright.
  */
 function watchSession(meta: ReportMeta) {
-  watchedSession.value = meta.session || null;
+  if (!meta.session) {
+    return;
+  }
 
-  store.commit('slideInPanel/open', {
-    component:      AgentSessionPanel,
-    componentProps: { width: 'wide', meta },
-  });
+  // Any panel of ours is in the way of the drawer, which docks to an edge of the whole page.
+  store.commit('slideInPanel/close');
+
+  const result = openAgentDrawer(meta.session);
+
+  drawerHint.value = result === 'selected'
+    ? ''
+    : `The agent drawer is ${ result === 'already-open' ? 'already open' : 'open' } — pick the “Daily report ${ meta.reportDate }” tab.`;
+
+  if (drawerHint.value) {
+    setTimeout(() => (drawerHint.value = ''), 8000);
+  }
 }
 
 function open(meta: ReportMeta) {
@@ -474,6 +483,10 @@ function open(meta: ReportMeta) {
 
     <Banner v-if="error" color="error">
       {{ error }}
+    </Banner>
+
+    <Banner v-if="drawerHint" color="info" data-testid="idr-drawer-hint">
+      {{ drawerHint }}
     </Banner>
 
     <section v-if="activeRun" class="idr__running" data-testid="idr-running">

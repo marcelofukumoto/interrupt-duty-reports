@@ -18,7 +18,7 @@
 // Everything deterministic is in a script (run.sh, publish.sh) and everything judged is in the
 // prompt. The agent's job starts at data.json and stops at report.json; neither end of that is
 // left to it to improvise.
-import { AGENT_PROJECT, agentsApi } from './agents';
+import { agentsApi } from './agents';
 import { podExec, podRunScript, podWriteFile, shellQuote } from './exec';
 import type { PodRef } from './exec';
 import { createRunning, setStatus, updateMeta } from './store';
@@ -190,11 +190,17 @@ export async function startRun(credentials: Credentials, startedBy?: string): Pr
       { mode: '600', owner: POD_USER },
     );
 
-    const session = await api.agent.startInProject(
-      AGENT_PROJECT,
-      `Daily report ${ date }`,
-      openingPrompt(runDir, id, date),
-    );
+    // A drawer conversation, not a project one.
+    //
+    // The agents extension offers both, and a project's conversations are deliberately kept out
+    // of its drawer so that a workspace's chatter never fills the tab strip. A report is the
+    // other case: there is one a day, somebody wants to read it while it works, and the drawer
+    // is where agent conversations already live - so a run belongs in the strip rather than in a
+    // second terminal of our own. The title is what tells it apart from the rest.
+    const session = await api.agent.start();
+
+    await api.agent.rename(session, `Daily report ${ date }`).catch(() => undefined);
+    await api.agent.queue(session, openingPrompt(runDir, id, date));
 
     // After the conversation exists, not before. meta.json travels with the run so that
     // publish.sh can finish it without being told the date or who started it - and publish.sh
@@ -259,35 +265,29 @@ export async function stopRun(meta: ReportMeta): Promise<void> {
 }
 
 /**
- * End the conversations of runs that are over, and delete what they left in the pod.
+ * End conversations that belong to runs that are over.
  *
- * A conversation does not end when the work in it does. claude-session.sh runs claude in a
- * loop so that a pane survives a crash, which means a finished report leaves a tmux session
- * with an idle claude in it - and a hundred reports would leave a hundred of them in one pod,
- * along with a hundred run directories of gathered JSON.
+ * A conversation does not end when the work in it does. claude-session.sh runs claude in a loop
+ * so that a pane survives a crash, which means a finished report leaves a tmux session with an
+ * idle claude in it - and a hundred reports would leave a hundred of them in one pod.
  *
- * So this is the other half of a run, and it is a sweep rather than a step at the end of one:
- * the run that matters most to clean up is the one whose browser tab was closed while it was
- * finishing, and that run has nothing left to execute a final step. It takes the sessions that
- * are still in flight and ends everything else this extension started.
+ * Told exactly which ids to end, rather than listing the pod's conversations and ending whatever
+ * is not wanted. That distinction mattered less while these were project conversations in a
+ * namespace of our own; now that a run is an ordinary drawer conversation, anything that
+ * enumerates and prunes would be enumerating somebody else's work. The only ids passed here are
+ * ones this extension recorded on a report it created itself.
  */
-export async function sweepFinishedRuns(activeSessions: string[]): Promise<number> {
+export async function endSessions(ids: string[]): Promise<number> {
   const api = agentsApi();
 
   if (!api) {
     return 0;
   }
 
-  const keep = new Set(activeSessions.filter(Boolean));
-  const sessions = await api.agent.projectSessions(AGENT_PROJECT).catch(() => []);
   let ended = 0;
 
-  for (const session of sessions) {
-    if (keep.has(session.id)) {
-      continue;
-    }
-
-    await api.agent.end(session.id).catch(() => undefined);
+  for (const id of ids.filter(Boolean)) {
+    await api.agent.end(id).catch(() => undefined);
     ended++;
   }
 

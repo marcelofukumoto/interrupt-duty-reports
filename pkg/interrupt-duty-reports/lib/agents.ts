@@ -32,8 +32,21 @@ export interface AgentsApi {
 const AGENTS_GLOBAL = '__agents';
 const AGENTS_READY_EVENT = 'agents:ready';
 
-/** The project every conversation this extension starts belongs to, so the drawer never lists them. */
-export const AGENT_PROJECT = 'interrupt-duty';
+/**
+ * Where the agents extension keeps its drawer, and how to point it at one conversation.
+ *
+ * Both of these are that extension's own names rather than anything it publishes, and using them
+ * is a deliberate trade. Its public API offers the terminal as a component to mount, which is
+ * the supported way to show a conversation - but a pane mounted here is a second place agent
+ * conversations live, and the whole point of this is to have one. So the drawer is opened
+ * instead, and every reach below is guarded: the worst case is the drawer opens without the
+ * right tab selected, which is a tab somebody picks by name.
+ */
+const DRAWER_HOST_ID = 'extension-studio-agent-overlay';
+const DRAWER_STATE_KEY = 'extension-studio.agent.drawer';
+
+/** The physical key of the chord that opens the drawer - see the agents extension's overlay.ts. */
+const DRAWER_CHORD_CODE = 'Backquote';
 
 /**
  * The version that first offered what this extension calls: `startInProject` with an opening
@@ -48,21 +61,64 @@ export function agentsApi(): AgentsApi | null {
 }
 
 /**
- * The agents extension's terminal, as a component to mount.
+ * Ask the drawer to come back on this conversation.
  *
- * This is the whole of what "show me the session" needs: the same xterm, the same exec socket,
- * the same tmux reattach and the same chat/terminal toggle the drawer uses, given a `session`
- * prop. Nothing is imported - two extensions are two bundles, and the component travels on
- * `window` - but both run on the dashboard's own Vue, which is what makes mounting another
- * bundle's component work at all.
- *
- * It is deliberately not the drawer. The drawer lists only `agent-<n>`; a project's
- * conversations - which is what every run here is - are excluded from it by design, so that a
- * workspace's chatter never fills the global strip. Placing the pane is the offered way in, and
- * the agents README says so outright.
+ * `active` only - never `open`. The panel opens itself on mount when the stored state says open,
+ * and the chord below then toggles it straight back shut; writing the one field the tab is
+ * chosen from and leaving the rest avoids that, and leaves somebody's docking side and panel
+ * size alone into the bargain.
  */
-export function terminalComponent(): unknown | null {
-  return agentsApi()?.terminal?.component || null;
+function rememberDrawerTab(session: string): void {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(DRAWER_STATE_KEY) || '{}') || {};
+
+    window.localStorage.setItem(DRAWER_STATE_KEY, JSON.stringify({ ...stored, active: session }));
+  } catch {
+    // A browser that will not store it is one where the drawer opens on its own last tab.
+  }
+}
+
+function drawerIsOpen(): boolean {
+  try {
+    return JSON.parse(window.localStorage.getItem(DRAWER_STATE_KEY) || '{}')?.open === true;
+  } catch {
+    return false;
+  }
+}
+
+/** What opening the drawer managed to do, so a caller can say something useful about the rest. */
+export type DrawerResult = 'selected' | 'opened' | 'already-open';
+
+/**
+ * Open the agents drawer on one conversation.
+ *
+ * Through the two things that extension actually offers a stranger: the state it keeps in
+ * localStorage, and the chord it listens for. Its panel is a Vue app of its own mounted on the
+ * body, and reaching into that for a method to call is the kind of coupling that breaks on
+ * somebody else's release - so this does not.
+ *
+ * What that costs is honest and bounded. A drawer being built for the first time reads the
+ * stored tab and lands on it, which is the common case. One that has already chosen a tab once
+ * prefers its own from then on, so re-pointing it is not possible from out here and the caller
+ * says which tab to click instead. Every conversation this extension starts is named for its
+ * date, so that instruction is followable.
+ */
+export function openAgentDrawer(session: string): DrawerResult {
+  rememberDrawerTab(session);
+
+  if (drawerIsOpen()) {
+    return 'already-open';
+  }
+
+  // A panel that does not exist yet is built by this and restores the tab just written; one that
+  // exists already will open on whichever tab it last had.
+  const fresh = !document.getElementById(DRAWER_HOST_ID);
+
+  window.dispatchEvent(new KeyboardEvent('keydown', {
+    code: DRAWER_CHORD_CODE, ctrlKey: true, shiftKey: true, bubbles: true,
+  }));
+
+  return fresh ? 'selected' : 'opened';
 }
 
 /** Compare two dotted versions numerically - `0.1.9` is not later than `0.1.40`. */

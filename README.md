@@ -13,10 +13,10 @@ copy and send.
   data, analyses it against the report specification, and publishes the result. While it runs,
   the row shows which of the four steps it is on — read from the files the run has produced, not
   guessed from the terminal.
-- **Watch the agent** — opens the run's conversation as a live terminal: the Agents extension's
-  own pane, so it is the real session, interactive, and you can ask it questions. It stays
-  openable for 30 minutes after a run finishes, which is when the transcript is most worth
-  reading — the agent explains the judgment calls the report itself does not carry.
+- **Watch the agent** — opens the run in the **Agents drawer**, where agent conversations
+  already live. It stays openable for 30 minutes after a run finishes, which is when the
+  transcript is most worth reading — the agent explains the judgment calls the report itself
+  does not carry.
 - **Stop** — ends the run in flight.
 - **Delete** — on each row in the list view, and inside the report in both views. A calendar
   square is a hundred pixels wide with no room for a button and its confirmation, so there the
@@ -157,17 +157,25 @@ improvise, and `publish.sh` refuses to publish a `report.json` that is not a val
 
 ### Watching the agent
 
-The pane is the Agents extension's own `window.__agents.terminal.component`, mounted here rather
-than reached through its drawer — that drawer lists only `agent-<n>`, and every run here is a
-*project* conversation, which it excludes by design so a workspace's chatter never fills the
-global strip. Placing the pane where it is wanted is the integration that extension offers, and
-it is the same xterm, exec socket and tmux reattach either way.
+A run is an ordinary **drawer conversation**, named `Daily report <date>`, so it appears in the
+Agents drawer's tab strip beside everything else. The Agents extension also offers *project*
+conversations, which its drawer deliberately excludes so that a workspace's chatter never fills
+that strip — but a report is the other case: there is one a day, somebody wants to read it while
+it works, and a second terminal of our own would be a second place to look for the same thing.
 
-Conversations are swept 30 minutes after their run ends, rather than the instant it ends. The
-window is a **time**, not "is somebody looking at it", because looking at it is per-tab: another
-open tab of this page runs its own loop, knows nothing about this one's open panel, and would
-end the session out from under it. Anything derived from one tab's state is a rule the other
-tabs do not follow.
+The drawer is opened through the only two things that extension offers a stranger: the state it
+keeps in `localStorage`, and the chord it listens for. Its panel is a Vue app mounted on the
+body, and reaching into that for a method to call is the kind of coupling that breaks on
+somebody else's release — so this does not. What that costs is bounded and honest: a drawer
+being built for the first time reads the stored tab and lands on it, and one that has already
+chosen a tab prefers its own from then on, so the page says which tab to click instead. Every
+conversation is named for its date, which makes that followable.
+
+Conversations are ended 30 minutes after their run finishes, and only ones this extension
+recorded on a report it created — never by listing the pod's conversations and pruning, which
+would now be pruning somebody else's work. The window is a **time**, not "is somebody looking at
+it", because looking at it is per-tab: another open tab of this page runs its own loop, knows
+nothing about this one, and would end the session out from under it.
 
 ## The report specification
 
