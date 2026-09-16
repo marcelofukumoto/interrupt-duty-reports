@@ -1,47 +1,84 @@
 <script setup lang="ts">
-// The two tokens a report needs, asked for at the moment it is run.
+// The two credentials a report needs, managed the way Extension Studio manages its GitHub token.
 //
-// Deliberately not a Secret and deliberately not remembered.
+// Stored once rather than typed per run, and stored write-only: a credential goes into a Secret
+// and never comes back out to this page. What the page can know is whether one is there, which
+// is what decides between "Set" and "Replace" - so a field says "leave blank to keep" instead of
+// showing a value somebody could shoulder-read.
 //
-// This extension's premise is that everybody using it is a Rancher admin, which means Rancher's
-// own secret storage would protect these from nobody: a Secret readable by every admin is a
-// shared credential, and a Jira PAT is a person's, not the cluster's. So they are typed per run,
-// held in this tab's memory only for as long as the tab is open, written into the agent pod as
-// a 0600 file that the gather reads once, and removed by publish.sh when the run ends. Nothing
-// is written to localStorage, and nothing survives a refresh.
+// The GitHub token is shared with Extension Studio on purpose. It is the same credential - an
+// account's token, reused by everything publishing on their behalf - so if that extension
+// already has one this borrows it rather than asking for a second copy to keep in step.
 import { computed, ref } from 'vue';
 import { Banner } from '@components/Banner';
+import { saveCredentials } from '../lib/credentials';
+import type { CredentialStatus } from '../lib/credentials';
 
 const props = defineProps<{
-  /** Prefilled from this tab's memory, so a second report in one sitting is one click. */
-  jiraPat: string;
-  ghToken: string;
-  busy: boolean;
+  status: CredentialStatus;
+  /** True when this opened because a run could not start without them. */
+  blocking?: boolean;
+  busy?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'cancel'): void;
-  (e: 'run', value: { jiraPat: string; ghToken: string }): void;
+  (e: 'saved'): void;
 }>();
 
-const jira = ref(props.jiraPat);
-const github = ref(props.ghToken);
+const jira = ref('');
+const github = ref('');
 const showJira = ref(false);
 const showGithub = ref(false);
+const saving = ref(false);
+const error = ref('');
 
-const ready = computed(() => !!jira.value.trim() && !!github.value.trim());
+const ghStored = computed(() => props.status.gh !== 'none');
+const borrowed = computed(() => props.status.gh === 'studio');
 
-function run() {
-  if (!ready.value || props.busy) {
+/** Nothing typed and nothing missing means there is nothing to do but carry on. */
+const ready = computed(() => (ghStored.value || !!github.value.trim()) && (props.status.jira || !!jira.value.trim()));
+
+async function save() {
+  if (!ready.value || saving.value) {
     return;
   }
 
-  emit('run', { jiraPat: jira.value.trim(), ghToken: github.value.trim() });
+  saving.value = true;
+  error.value = '';
+
+  try {
+    await saveCredentials({
+      ...(github.value.trim() ? { ghToken: github.value.trim() } : {}),
+      ...(jira.value.trim() ? { jiraPat: jira.value.trim() } : {}),
+    });
+    jira.value = '';
+    github.value = '';
+    emit('saved');
+  } catch (e: any) {
+    error.value = e?.message || String(e);
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function clear(which: 'gh' | 'jira') {
+  saving.value = true;
+  error.value = '';
+
+  try {
+    await saveCredentials(which === 'gh' ? { ghToken: '' } : { jiraPat: '' });
+    emit('saved');
+  } catch (e: any) {
+    error.value = e?.message || String(e);
+  } finally {
+    saving.value = false;
+  }
 }
 </script>
 
 <template>
-  <div class="creds-backdrop" @click.self="!busy && emit('cancel')">
+  <div class="creds-backdrop" @click.self="!saving && !busy && emit('cancel')">
     <div
       class="creds"
       role="dialog"
@@ -50,17 +87,34 @@ function run() {
       data-testid="idr-credentials"
     >
       <h2 id="idr-creds-title" class="creds__title">
-        Run today's report
+        Credentials
       </h2>
 
       <p class="creds__lede">
-        The report reads the three active Jira queues and the last 30 days of
-        <code>rancher/dashboard</code> community issues, so it needs a token for each.
+        <template v-if="blocking">
+          A report reads the three active Jira queues and the last 30 days of
+          <code>rancher/dashboard</code> community issues, so it needs a token for each. They are
+          stored once — you will not be asked again.
+        </template>
+        <template v-else>
+          Stored in a Secret and read by the agent pod when a report runs. They never come back
+          out to this page, so a stored one can be replaced but not shown.
+        </template>
       </p>
 
+      <Banner v-if="error" color="error">
+        {{ error }}
+      </Banner>
+
       <label class="creds__field">
-        <span class="creds__label">Jira personal access token</span>
-        <span class="creds__hint">jira.suse.com → Profile → Personal Access Tokens</span>
+        <span class="creds__label">
+          Jira personal access token
+          <span class="creds__state" :class="{ 'is-set': status.jira }">{{ status.jira ? 'Stored' : 'Not set' }}</span>
+        </span>
+        <span class="creds__hint">
+          jira.suse.com → Profile → Personal Access Tokens.
+          <template v-if="status.jira"> Leave blank to keep the stored one.</template>
+        </span>
         <span class="creds__input">
           <input
             v-model="jira"
@@ -68,22 +122,34 @@ function run() {
             autocomplete="off"
             spellcheck="false"
             data-testid="idr-jira-pat"
-            placeholder="JIRA_PAT"
-            @keyup.enter="run"
+            :placeholder="status.jira ? '••••••••  (stored)' : 'JIRA_PAT'"
+            @keyup.enter="save"
           >
           <button type="button" class="creds__peek" :title="showJira ? 'Hide' : 'Show'" @click="showJira = !showJira">
             <i class="icon" :class="showJira ? 'icon-hide' : 'icon-show'" />
           </button>
         </span>
+        <button v-if="status.jira" type="button" class="creds__clear" :disabled="saving" @click="clear('jira')">
+          Remove the stored token
+        </button>
       </label>
 
       <label class="creds__field">
-        <span class="creds__label">GitHub token</span>
+        <span class="creds__label">
+          GitHub token
+          <span class="creds__state" :class="{ 'is-set': ghStored }">
+            {{ borrowed ? 'From Extension Studio' : ghStored ? 'Stored' : 'Not set' }}
+          </span>
+        </span>
         <span class="creds__hint">
           Read-only, public access is all it needs: a classic token with the
           <code>public_repo</code> scope, or a fine-grained token with
-          <em>Public repositories (read-only)</em>. It never writes — no issue is opened,
-          commented on or labelled.
+          <em>Public repositories (read-only)</em>. It never writes.
+          <template v-if="borrowed">
+            Extension Studio already has one and this borrows it; setting one here uses that
+            instead.
+          </template>
+          <template v-else-if="ghStored"> Leave blank to keep the stored one.</template>
         </span>
         <span class="creds__input">
           <input
@@ -92,33 +158,36 @@ function run() {
             autocomplete="off"
             spellcheck="false"
             data-testid="idr-gh-token"
-            placeholder="GH_TOKEN"
-            @keyup.enter="run"
+            :placeholder="ghStored ? '••••••••  (stored)' : 'GH_TOKEN'"
+            @keyup.enter="save"
           >
           <button type="button" class="creds__peek" :title="showGithub ? 'Hide' : 'Show'" @click="showGithub = !showGithub">
             <i class="icon" :class="showGithub ? 'icon-hide' : 'icon-show'" />
           </button>
         </span>
+        <button v-if="status.gh === 'ours'" type="button" class="creds__clear" :disabled="saving" @click="clear('gh')">
+          Remove the stored token
+        </button>
       </label>
 
       <Banner color="info" class="creds__note">
-        Both tokens go straight into the agent pod as a <code>0600</code> file, are read once by
-        the gather, and are deleted when the run ends. They are never stored in a Secret, never
-        put in the prompt, and never kept after you close this tab.
+        Written straight into the Secret and never read back by this page — replacing one is
+        possible, seeing it is not. The agent pod reads them with its own ServiceAccount at the
+        moment a report runs.
       </Banner>
 
       <div class="creds__actions">
-        <button type="button" class="btn role-secondary" :disabled="busy" @click="emit('cancel')">
-          Cancel
+        <button type="button" class="btn role-secondary" :disabled="saving || busy" @click="emit('cancel')">
+          {{ blocking ? 'Cancel' : 'Close' }}
         </button>
         <button
           type="button"
           class="btn role-primary"
-          :disabled="!ready || busy"
+          :disabled="!ready || saving || busy"
           data-testid="idr-run-confirm"
-          @click="run"
+          @click="save"
         >
-          {{ busy ? 'Starting…' : 'Generate report' }}
+          {{ saving ? 'Saving…' : busy ? 'Starting…' : blocking ? 'Save and generate' : 'Save' }}
         </button>
       </div>
     </div>
@@ -149,7 +218,7 @@ function run() {
 
 .creds {
   width: 100%;
-  max-width: 560px;
+  max-width: 580px;
   max-height: 90vh;
   overflow-y: auto;
   padding: 24px;
@@ -176,23 +245,41 @@ function run() {
   }
 
   &__label {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 10px;
     font-weight: 600;
     font-size: 13px;
     margin-bottom: 2px;
   }
 
+  &__state {
+    padding: 1px 8px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+
+    &.is-set {
+      color: var(--success);
+      border-color: var(--success);
+    }
+  }
+
   &__hint {
     display: block;
     color: var(--muted);
+    font-size: 12px;
+    line-height: 17px;
+    margin-bottom: 6px;
 
     em {
       font-style: normal;
       color: var(--body-text);
     }
-    font-size: 12px;
-    line-height: 17px;
-    margin-bottom: 6px;
   }
 
   &__input {
@@ -229,6 +316,20 @@ function run() {
 
     &:hover {
       color: var(--body-text);
+    }
+  }
+
+  &__clear {
+    margin-top: 6px;
+    border: none;
+    background: transparent;
+    padding: 0;
+    color: var(--error);
+    font-size: 11px;
+    cursor: pointer;
+
+    &:hover {
+      text-decoration: underline;
     }
   }
 

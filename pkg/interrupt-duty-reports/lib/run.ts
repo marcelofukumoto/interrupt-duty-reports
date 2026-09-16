@@ -18,7 +18,7 @@
 // Everything deterministic is in a script (run.sh, publish.sh) and everything judged is in the
 // prompt. The agent's job starts at data.json and stops at report.json; neither end of that is
 // left to it to improvise.
-import { AGENT_PROJECT, agentsApi } from './agents';
+import { agentProject, agentsApi } from './agents';
 import { podExec, podRunScript, podWriteFile, shellQuote } from './exec';
 import type { PodRef } from './exec';
 import { createRunning, setStatus, updateMeta } from './store';
@@ -34,11 +34,6 @@ const POD_USER = '1000:1000';
 /** Where every conversation in the agent pod runs, and the home it runs with. */
 const CONVERSATIONS = '/workspace/conversations';
 const AGENT_HOME = '/workspace/.home';
-
-export interface Credentials {
-  jiraPat: string;
-  ghToken: string;
-}
 
 export interface StartedRun {
   id: string;
@@ -144,7 +139,7 @@ async function writeSeed(target: PodRef): Promise<void> {
  * anything after the summary ConfigMap fails, the summary is marked failed on the way out, so
  * the list shows what happened instead of a row stuck on "running" forever.
  */
-export async function startRun(credentials: Credentials, startedBy?: string): Promise<StartedRun> {
+export async function startRun(startedBy?: string): Promise<StartedRun> {
   const api = agentsApi();
 
   if (!api) {
@@ -182,16 +177,10 @@ export async function startRun(credentials: Credentials, startedBy?: string): Pr
       20000,
     );
 
-    // 0600 and owned by the pane's user: read once by the gather, removed by publish.sh.
-    await podWriteFile(
-      target,
-      `${ runDir }/creds.json`,
-      JSON.stringify({ JIRA_PAT: credentials.jiraPat, GH_TOKEN: credentials.ghToken }),
-      { mode: '600', owner: POD_USER },
-    );
-
+    // No credentials are written from here. run.sh reads them out of the Secret with the pod's
+    // own ServiceAccount at the moment it needs them, so nothing this page holds is a token.
     const session = await api.agent.startInProject(
-      AGENT_PROJECT,
+      agentProject(id),
       `Daily report ${ date }`,
       openingPrompt(runDir, id, date),
     );
@@ -221,73 +210,35 @@ export async function startRun(credentials: Credentials, startedBy?: string): Pr
     const why = e?.message || String(e);
 
     await setStatus(id, 'failed', why).catch(() => undefined);
-    // The tokens do not stay behind on a run that never got going.
-    await podExec(target, ['/bin/sh', '-c', `rm -f ${ shellQuote(`${ runDir }/creds.json`) }`], { timeoutMs: 15000 }).catch(() => undefined);
 
     throw new Error(why, { cause: e });
   }
 }
 
 /**
- * Stop a run.
+ * End the conversations of runs that are over.
  *
- * Ending the conversation is what actually stops the work - it kills the tmux session the pane
- * runs in, so the claude inside it goes with it. The rest is tidying: the row says cancelled
- * rather than sitting on "running" for ever, and the tokens go, because publish.sh is the thing
- * that would have removed them and it is not going to be called now.
+ * A conversation does not end when the work in it does. claude-session.sh runs claude in a loop
+ * so that a pane survives a crash, which means a finished report leaves a tmux session with an
+ * idle claude in it - and a hundred reports would leave a hundred of them in one pod.
+ *
+ * Told exactly which ids to end, rather than listing the pod's conversations and ending whatever
+ * is not wanted. Enumerating raced with starting: a run that had registered its conversation but
+ * not yet recorded the id was a conversation nothing claimed, so the next sweep ended it - and
+ * the run went on writing its report into a pane that had been killed. Being told is the
+ * difference between cleaning up after a run and interrupting one.
  */
-export async function stopRun(meta: ReportMeta): Promise<void> {
-  const api = agentsApi();
-
-  if (api && meta.session) {
-    await api.agent.end(meta.session).catch(() => undefined);
-  }
-
-  const pod = await api?.agent.pod().catch(() => null);
-
-  if (pod) {
-    const target = agentTarget(pod);
-
-    await podExec(
-      target,
-      ['/bin/sh', '-c', `rm -f ${ shellQuote(`${ ROOT }/${ meta.id }/creds.json`) }`],
-      { timeoutMs: 15000 },
-    ).catch(() => undefined);
-  }
-
-  await setStatus(meta.id, 'cancelled', 'Stopped from the reports page.');
-}
-
-/**
- * End the conversations of runs that are over, and delete what they left in the pod.
- *
- * A conversation does not end when the work in it does. claude-session.sh runs claude in a
- * loop so that a pane survives a crash, which means a finished report leaves a tmux session
- * with an idle claude in it - and a hundred reports would leave a hundred of them in one pod,
- * along with a hundred run directories of gathered JSON.
- *
- * So this is the other half of a run, and it is a sweep rather than a step at the end of one:
- * the run that matters most to clean up is the one whose browser tab was closed while it was
- * finishing, and that run has nothing left to execute a final step. It takes the sessions that
- * are still in flight and ends everything else this extension started.
- */
-export async function sweepFinishedRuns(activeSessions: string[]): Promise<number> {
+export async function endSessions(ids: string[]): Promise<number> {
   const api = agentsApi();
 
   if (!api) {
     return 0;
   }
 
-  const keep = new Set(activeSessions.filter(Boolean));
-  const sessions = await api.agent.projectSessions(AGENT_PROJECT).catch(() => []);
   let ended = 0;
 
-  for (const session of sessions) {
-    if (keep.has(session.id)) {
-      continue;
-    }
-
-    await api.agent.end(session.id).catch(() => undefined);
+  for (const id of ids.filter(Boolean)) {
+    await api.agent.end(id).catch(() => undefined);
     ended++;
   }
 

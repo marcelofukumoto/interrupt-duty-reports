@@ -23,12 +23,14 @@ import ReportRow from '../components/ReportRow.vue';
 import RunProgress from '../components/RunProgress.vue';
 import TrendTile from '../components/TrendTile.vue';
 import { agentsStatus, whenAgentsReady } from '../lib/agents';
+import { credentialsReady, readCredentialStatus } from '../lib/credentials';
+import type { CredentialStatus } from '../lib/credentials';
 import type { AgentsStatus } from '../lib/agents';
 import {
   deleteReport, listReports, MAX_REPORTS, pruneToCap, setStatus,
 } from '../lib/store';
 import {
-  runPhase, startRun, stopRun, sweepFinishedRuns, sweepRunDirectories,
+  endSessions, runPhase, startRun, stopRun, sweepRunDirectories,
 } from '../lib/run';
 import type { RunPhase } from '../lib/run';
 import {
@@ -48,6 +50,9 @@ const agents = ref<AgentsStatus>({
 const loading = ref(true);
 const error = ref('');
 const askingForTokens = ref(false);
+/** Whether the dialog opened because a run could not start, or because somebody asked for it. */
+const blockingCredentials = ref(false);
+const credentials = ref<CredentialStatus>({ gh: 'none', jira: false, unreadable: false });
 const starting = ref(false);
 const stopping = ref(false);
 const phase = ref<RunPhase>('starting');
@@ -61,8 +66,6 @@ const phase = ref<RunPhase>('starting');
 const watchedSession = ref<string | null>(null);
 const query = ref('');
 const searchBox = ref<HTMLInputElement | null>(null);
-/** The tab's memory of the two tokens, so a second report in one sitting is one click. */
-const remembered = ref({ jiraPat: '', ghToken: '' });
 
 const now = new Date();
 const shown = ref({ year: now.getUTCFullYear(), month: now.getUTCMonth() });
@@ -113,6 +116,7 @@ let previousRun: string | null = null;
 
 const activeRun = computed(() => reports.value.find((r) => r.status === 'running') || null);
 const canGenerate = computed(() => agents.value.state === 'ready' && !activeRun.value && !starting.value);
+const haveCredentials = computed(() => credentialsReady(credentials.value));
 const trend = computed(() => actNowTrend(reports.value));
 
 /** Which reports a search matched. Null when nothing is being searched for. */
@@ -208,23 +212,22 @@ async function refresh() {
  */
 async function sweep() {
   const now = Date.now();
-  const keep = reports.value
+  // Named, not enumerated. Only conversations this extension recorded on a report of its own,
+  // and only where that report finished long enough ago - so a run still being set up, whose id
+  // is not written down yet, can never be caught by somebody else's sweep.
+  const stale = reports.value
     .filter((report) => {
-      if (report.status === 'running') {
-        return true;
+      if (report.status === 'running' || !report.session || report.session === watchedSession.value) {
+        return false;
       }
 
       const finished = Date.parse(report.finishedAt || '');
 
-      return !Number.isNaN(finished) && now - finished < SESSION_GRACE_MS;
+      return !Number.isNaN(finished) && now - finished >= SESSION_GRACE_MS;
     })
     .map((report) => report.session || '');
 
-  // This tab's open drawer as well, so a conversation being read past the grace window is not
-  // closed under it by this tab at least.
-  keep.push(watchedSession.value || '');
-
-  await sweepFinishedRuns(keep).catch(() => undefined);
+  await endSessions(stale).catch(() => undefined);
   await sweepRunDirectories(reports.value.map((r) => r.id)).catch(() => undefined);
 }
 
@@ -293,6 +296,7 @@ onMounted(async() => {
   agents.value = await agentsStatus();
 
   await refresh();
+  credentials.value = await readCredentialStatus().catch(() => credentials.value);
   loading.value = false;
 
   window.addEventListener('keydown', onKeydown);
@@ -315,23 +319,59 @@ onBeforeUnmount(() => {
   }
 });
 
-function openGenerate() {
+/**
+ * Generate, asking for credentials only when there are none.
+ *
+ * They are stored, so the common path is a click: the dialog is for the first run and for
+ * changing one, not for every report.
+ */
+async function openGenerate() {
   if (!canGenerate.value) {
     return;
   }
+
+  credentials.value = await readCredentialStatus().catch(() => credentials.value);
+
+  if (haveCredentials.value) {
+    await generate();
+
+    return;
+  }
+
+  blockingCredentials.value = true;
   askingForTokens.value = true;
 }
 
-async function generate(credentials: { jiraPat: string; ghToken: string }) {
+function manageCredentials() {
+  blockingCredentials.value = false;
+  askingForTokens.value = true;
+  readCredentialStatus().then((status) => (credentials.value = status)).catch(() => undefined);
+}
+
+/** After the dialog saved: pick up the new state, and carry on if it was in the way of a run. */
+async function credentialsSaved() {
+  credentials.value = await readCredentialStatus().catch(() => credentials.value);
+
+  if (!blockingCredentials.value) {
+    askingForTokens.value = false;
+
+    return;
+  }
+
+  if (haveCredentials.value) {
+    askingForTokens.value = false;
+    await generate();
+  }
+}
+
+async function generate() {
   starting.value = true;
   error.value = '';
 
   try {
-    remembered.value = credentials;
-    const started = await startRun(credentials, store.getters['auth/principal']?.loginName || undefined);
+    const started = await startRun(store.getters['auth/principal']?.loginName || undefined);
 
     previousRun = started.id;
-    askingForTokens.value = false;
     // A run always lands on today, so that is the month to be looking at.
     shown.value = { year: new Date().getUTCFullYear(), month: new Date().getUTCMonth() };
     await refresh();
@@ -373,6 +413,12 @@ async function remove(meta: ReportMeta) {
     // cannot leave a claude in the pod working on something nothing will ever read.
     if (meta.status === 'running') {
       await stopRun(meta).catch(() => undefined);
+    }
+
+    // Its conversation too: nothing enumerates the pod any more, so a report that goes without
+    // taking its own pane with it is a pane nothing will ever name again.
+    if (meta.session) {
+      await endSessions([meta.session]).catch(() => undefined);
     }
 
     await deleteReport(meta.id);
@@ -472,6 +518,16 @@ function open(meta: ReportMeta) {
         >
           <i class="icon icon-close" />
           {{ stopping ? 'Stopping…' : 'Stop' }}
+        </button>
+        <button
+          type="button"
+          class="btn role-secondary"
+          data-testid="idr-credentials-open"
+          title="The Jira and GitHub tokens a report is generated with"
+          @click="manageCredentials"
+        >
+          <i class="icon icon-key" />
+          Credentials
         </button>
       </div>
     </header>
@@ -614,11 +670,11 @@ function open(meta: ReportMeta) {
 
     <CredentialsDialog
       v-if="askingForTokens"
-      :jira-pat="remembered.jiraPat"
-      :gh-token="remembered.ghToken"
+      :status="credentials"
+      :blocking="blockingCredentials"
       :busy="starting"
       @cancel="askingForTokens = false"
-      @run="generate"
+      @saved="credentialsSaved"
     />
   </div>
 </template>

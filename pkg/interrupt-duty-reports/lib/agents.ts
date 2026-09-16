@@ -32,8 +32,21 @@ export interface AgentsApi {
 const AGENTS_GLOBAL = '__agents';
 const AGENTS_READY_EVENT = 'agents:ready';
 
-/** The project every conversation this extension starts belongs to, so the drawer never lists them. */
-export const AGENT_PROJECT = 'interrupt-duty';
+/**
+ * The project one run's conversation belongs to: the run's own id.
+ *
+ * A project rather than a drawer conversation, so the agents drawer never lists it - and a
+ * project *per run* rather than one for the whole extension, because the pod hands out the
+ * lowest free ordinal within a project. With one shared project every run was `p-interrupt-duty-1`
+ * again as soon as the previous conversation was ended, so a stored id pointed at whichever run
+ * happened to hold it now: opening a report's session showed a different run's, or a fresh pane.
+ *
+ * A report id is already unique, already lowercase letters, digits and hyphens, and at 23
+ * characters is well inside the 40 a project name may be.
+ */
+export function agentProject(reportId: string): string {
+  return reportId;
+}
 
 /**
  * The version that first offered what this extension calls: `startInProject` with an opening

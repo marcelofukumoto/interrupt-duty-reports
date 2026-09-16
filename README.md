@@ -97,43 +97,48 @@ has not come up yet — the Generate button stays disabled until all three are t
 
 [agents]: https://github.com/codyrancher/agents
 
-### Two tokens, per run
+### Two tokens, stored once
 
-The report reads Jira and GitHub, so it needs a credential for each. They are typed into the
-dialog when you press Generate.
+The report reads Jira and `rancher/dashboard`, so it needs a credential for each. They are
+stored the way Extension Studio stores its GitHub token — copied from that extension down to the
+key name, because the interesting part is not where the Secret is but how it is handled.
 
 | Token | What it is | What it needs |
 | --- | --- | --- |
-| `JIRA_PAT` | A Jira personal access token from `jira.suse.com` → Profile → **Personal Access Tokens** | Read access to the `SURE` project |
-| `GH_TOKEN` | A GitHub token | **Classic:** the `public_repo` scope. **Fine-grained:** *Public repositories (read-only)* |
+| `jira_pat` | A Jira personal access token from `jira.suse.com` → Profile → **Personal Access Tokens** | Read access to the `SURE` project |
+| `gh_token` | A GitHub token | **Classic:** the `public_repo` scope. **Fine-grained:** *Public repositories (read-only)* |
 
-**Read-only public access is all it needs.** `rancher/dashboard` is a public repository, and
-the daily report deliberately does not touch Dependabot alerts — those are a separate process,
-and reading them would need `security_events` plus repo-admin rights on a repository nobody
-here owns.
+**Read-only public access is all GitHub needs.** `rancher/dashboard` is public, and the daily
+report deliberately does not touch Dependabot alerts — those are a separate process, and reading
+them would need `security_events` plus repo-admin rights on a repository nobody here owns. The
+gather makes exactly one GitHub call: a read-only GraphQL query for the repository's open
+issues. Nothing is ever written.
 
-The gather makes exactly one GitHub call: a read-only GraphQL query for the repository's open
-issues. Nothing is ever written — no issue is opened, commented on or labelled by this
-extension, and the suggested comments are for you to paste yourself.
+**The GitHub token is shared with Extension Studio.** If that extension has one, this borrows
+it: the same key, in the same kind of Secret, because it is the same credential — an account's
+token, reused by everything publishing on their behalf. Asking for a second copy would be asking
+somebody to keep two copies of one secret in step. Setting one here overrides it; the dialog
+says which is in use.
 
-> A fine-grained token cannot be scoped to `rancher/dashboard` specifically unless that
-> organization has opted your account in, so *Public repositories (read-only)* is the
-> fine-grained equivalent.
+#### How they are handled
 
-#### Why they are not stored
+Four properties, all of them inherited from Extension Studio's design:
 
-Every user of this extension is a Rancher admin. A Kubernetes Secret readable by every admin
-protects a personal Jira token from nobody — it just turns it into a shared credential with
-your name on it. So instead:
+- **Write-only from the browser.** A credential goes into the Secret and never comes back out.
+  Nothing in this extension fetches a Secret's `data`.
+- **`PartialObjectMetadata`.** Asking the apiserver for that representation returns `metadata`
+  with no `data` and no `stringData` — the only way to learn anything about a Secret from a
+  browser without the browser receiving it. It goes on the writes as much as the read, because a
+  PATCH answers with the whole updated object by default, which is the same leak in reverse. It
+  has to be the raw `/api/v1/...` path; Steve answers in its own shape and ignores the header.
+- **Merge patches.** A read-modify-PUT would have to fetch the object to preserve the keys it is
+  not touching, pulling the credential into the page on every save. A patch says what changed;
+  `null` deletes a key.
+- **An annotation says whether one is stored**, so the dialog can choose between "Set" and
+  "Replace" without going near `data`.
 
-- they are held in the browser tab's memory for as long as the tab is open, so a second report
-  in one sitting is one click;
-- they are written into the agent pod as a `0600` file owned by the pane's user, over the exec
-  socket's **stdin** — never on a command line, where every process in the pod could read them,
-  and never in the prompt, which ends up in a transcript;
-- the gather reads the file once, and `publish.sh` deletes it when the run ends — as does Stop,
-  and as does a run that fails before it starts;
-- nothing is written to `localStorage`, and nothing survives a refresh.
+The agent pod reads them itself, with its own ServiceAccount, at the moment a report runs — see
+`seed/run.sh`. Nothing is sent from the browser into the pod, which is what the run used to do.
 
 ## How a run works
 
@@ -142,10 +147,9 @@ your name on it. So instead:
  ───────                        ────────────────────────────          ───────
  Generate ──────── summary ConfigMap: status "running" ──────────────────► │
           ── writes gather.mjs, run.sh, publish.sh, the spec ──► /workspace/.interrupt-duty
-          ── writes creds.json (0600, stdin only) ────────────► <run dir>
           ── startInProject(prompt) + start the pane ────────► conversation
                                         │
-                                        ├─ run.sh      → data.json
+                                        ├─ run.sh      → reads the Secret, then data.json
                                         ├─ the spec    → report.json
                                         └─ publish.sh  ── payload + summary ConfigMaps ──► │
  list polls the summary ◄─────────────────────────────────────────────────────────────────┘
