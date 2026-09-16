@@ -14,6 +14,7 @@ import {
 } from 'vue';
 import { useStore } from 'vuex';
 import { Banner } from '@components/Banner';
+import AgentSessionPanel from '../components/AgentSessionPanel.vue';
 import ButtonGroup from '@shell/components/ButtonGroup';
 import CalendarGrid from '../components/CalendarGrid.vue';
 import CredentialsDialog from '../components/CredentialsDialog.vue';
@@ -21,13 +22,13 @@ import ReportPanel from '../components/ReportPanel.vue';
 import ReportRow from '../components/ReportRow.vue';
 import RunProgress from '../components/RunProgress.vue';
 import TrendTile from '../components/TrendTile.vue';
-import { agentsStatus, openAgentDrawer, whenAgentsReady } from '../lib/agents';
+import { agentsStatus, whenAgentsReady } from '../lib/agents';
 import type { AgentsStatus } from '../lib/agents';
 import {
   deleteReport, listReports, MAX_REPORTS, pruneToCap, setStatus,
 } from '../lib/store';
 import {
-  endSessions, runPhase, startRun, stopRun, sweepRunDirectories,
+  runPhase, startRun, stopRun, sweepFinishedRuns, sweepRunDirectories,
 } from '../lib/run';
 import type { RunPhase } from '../lib/run';
 import {
@@ -51,13 +52,13 @@ const starting = ref(false);
 const stopping = ref(false);
 const phase = ref<RunPhase>('starting');
 /**
- * Said when the drawer opened but could not be pointed at the right tab.
+ * The conversation whose drawer is open in this tab, if any.
  *
- * Which happens when the drawer had to be built from scratch by the chord: it exists a moment
- * later than the request to select a tab in it. The conversation is in the strip either way, and
- * named for its date, so this is a nudge rather than an error.
+ * Kept out of the sweep, so a transcript being read is not closed mid-sentence by this tab. It
+ * is only ever a second line of defence - the grace window below is what actually holds a
+ * finished conversation open, because another tab knows nothing about this one.
  */
-const drawerHint = ref('');
+const watchedSession = ref<string | null>(null);
 const query = ref('');
 const searchBox = ref<HTMLInputElement | null>(null);
 /** The tab's memory of the two tokens, so a second report in one sitting is one click. */
@@ -207,22 +208,23 @@ async function refresh() {
  */
 async function sweep() {
   const now = Date.now();
-  // Only this extension's own conversations, and only the ones whose run is well and truly
-  // over: these are ordinary drawer conversations now, sitting in the same strip as somebody's
-  // own work, so the set is built from what was recorded rather than from what is in the pod.
-  const stale = reports.value
+  const keep = reports.value
     .filter((report) => {
-      if (report.status === 'running' || !report.session) {
-        return false;
+      if (report.status === 'running') {
+        return true;
       }
 
       const finished = Date.parse(report.finishedAt || '');
 
-      return !Number.isNaN(finished) && now - finished >= SESSION_GRACE_MS;
+      return !Number.isNaN(finished) && now - finished < SESSION_GRACE_MS;
     })
     .map((report) => report.session || '');
 
-  await endSessions(stale).catch(() => undefined);
+  // This tab's open drawer as well, so a conversation being read past the grace window is not
+  // closed under it by this tab at least.
+  keep.push(watchedSession.value || '');
+
+  await sweepFinishedRuns(keep).catch(() => undefined);
   await sweepRunDirectories(reports.value.map((r) => r.id)).catch(() => undefined);
 }
 
@@ -382,43 +384,46 @@ async function remove(meta: ReportMeta) {
 }
 
 /**
- * Show the run in the agents drawer.
+ * Show the run's conversation, in a drawer of our own.
  *
- * The drawer rather than a terminal of our own, because that is where agent conversations
- * already are: a second pane here would be a second place to look for the same thing. A run is
- * an ordinary drawer conversation for exactly this reason, and it is named for its date so it is
- * findable in the strip whether or not it could be selected outright.
+ * The same Rancher drawer the report opens in, holding the Agents extension's terminal. Driving
+ * that extension's own panel instead meant reaching for state and a keystroke it never
+ * published, and putting this extension's conversations in a tab strip meant for theirs.
  */
 function watchSession(meta: ReportMeta) {
   if (!meta.session) {
     return;
   }
 
-  // Any panel of ours is in the way of the drawer, which docks to an edge of the whole page.
-  store.commit('slideInPanel/close');
+  watchedSession.value = meta.session;
 
-  const result = openAgentDrawer(meta.session);
-
-  drawerHint.value = result === 'selected'
-    ? ''
-    : `The agent drawer is ${ result === 'already-open' ? 'already open' : 'open' } — pick the “Daily report ${ meta.reportDate }” tab.`;
-
-  if (drawerHint.value) {
-    setTimeout(() => (drawerHint.value = ''), 8000);
-  }
+  store.commit('slideInPanel/open', {
+    component:      AgentSessionPanel,
+    componentProps: {
+      width:              'wide',
+      height:             'full',
+      triggerFocusTrap:   true,
+      closeOnRouteChange: ['name', 'params', 'query'],
+      onClose:            () => store.commit('slideInPanel/close'),
+      meta,
+    },
+  });
 }
 
 function open(meta: ReportMeta) {
   const previous = previousComplete.value.get(meta.id);
 
+  // Opened exactly as `Show Configuration` opens its own drawer: no `title` (the drawer chrome
+  // draws its own bar), full height, wide, focus-trapped, and closed through a listener rather
+  // than by the panel reaching for the store.
   store.commit('slideInPanel/open', {
     component:      ReportPanel,
     componentProps: {
-      // No `title`, deliberately. Setting one makes SlideInPanelManager draw its own header
-      // bar, which does not scroll with the panel - so the report would still have had a strip
-      // pinned above it after its own sticky header was taken out. The panel carries its own
-      // heading and close control instead, and Escape and the backdrop close it as always.
-      width: 'wide',
+      width:              'wide',
+      height:             'full',
+      triggerFocusTrap:   true,
+      closeOnRouteChange: ['name', 'params', 'query'],
+      onClose:            () => store.commit('slideInPanel/close'),
       meta,
       previousId:   previous?.id,
       previousDate: previous?.reportDate,
@@ -483,10 +488,6 @@ function open(meta: ReportMeta) {
 
     <Banner v-if="error" color="error">
       {{ error }}
-    </Banner>
-
-    <Banner v-if="drawerHint" color="info" data-testid="idr-drawer-hint">
-      {{ drawerHint }}
     </Banner>
 
     <section v-if="activeRun" class="idr__running" data-testid="idr-running">

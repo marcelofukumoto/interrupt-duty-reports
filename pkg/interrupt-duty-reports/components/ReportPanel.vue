@@ -15,8 +15,9 @@
 // The payload is fetched here rather than handed in, because the list only ever holds
 // summaries - a hundred rows of dates must not mean a hundred reports downloaded.
 import { computed, onMounted, ref } from 'vue';
-import { useStore } from 'vuex';
 import { Banner } from '@components/Banner';
+import Drawer from '@shell/components/Drawer/Chrome.vue';
+import RcButton from '@components/RcButton/RcButton.vue';
 import ItemCard from './ItemCard.vue';
 import CopyButton from './CopyButton.vue';
 import { getReport } from '../lib/store';
@@ -41,6 +42,9 @@ const props = defineProps<{
    * prop falls through onto the root element as a real HTML attribute.
    */
   width?: string;
+  height?: string;
+  triggerFocusTrap?: boolean;
+  closeOnRouteChange?: string[];
   /**
    * Removing this report, handed in by the page that owns the list.
    *
@@ -58,7 +62,7 @@ const delta = ref<ReportDelta | null>(null);
 const error = ref('');
 const loading = ref(true);
 const activeClass = ref<ItemClass | 'ALL'>('ALL');
-const store = useStore();
+const emit = defineEmits<{ (e: 'close'): void }>();
 
 const confirmingDelete = ref(false);
 const deleting = ref(false);
@@ -66,8 +70,15 @@ const deleting = ref(false);
 /** A run that did not finish has no report to show, and says what happened instead. */
 const unfinished = computed(() => (props.meta.status === 'complete' ? null : props.meta.status));
 
+/**
+ * Closing is the drawer's, not ours.
+ *
+ * Chrome draws the close control and the footer button; both raise this, and the page that
+ * opened the panel passed an `onClose` for it - which is how `Show Configuration` does it, and
+ * why nothing here commits to the store to shut itself.
+ */
 function close() {
-  store.commit('slideInPanel/close');
+  emit('close');
 }
 
 async function remove() {
@@ -299,147 +310,64 @@ const asText = computed(() => {
 </script>
 
 <template>
-  <div class="panel">
-    <div v-if="loading" class="panel__loading">
-      <i class="icon icon-spinner icon-spin" />
-      <span>Opening the report…</span>
-    </div>
+  <!--
+    Rancher's own drawer chrome - the one `Show Configuration` opens - rather than a panel of our
+    own inside the same slide-in. It supplies the title bar, the close control and the footer, so
+    the report reads as part of the dashboard rather than as something bolted into it.
+  -->
+  <Drawer
+    :aria-target="`the daily report for ${ meta.reportDate }`"
+    @close="close"
+  >
+    <template #title>
+      Daily report · {{ meta.reportDate }}
+    </template>
 
-    <section v-else-if="unfinished" class="panel__unfinished" data-testid="idr-unfinished">
-      <h2>
-        {{ meta.reportDate }} —
-        {{ unfinished === 'running' ? 'still being generated' : unfinished === 'failed' ? 'this run failed' : 'this run was stopped' }}
-      </h2>
-      <p v-if="meta.error" class="panel__unfinished-why">
-        {{ meta.error }}
-      </p>
-      <p v-else-if="unfinished === 'running'">
-        The agent is working on it. The page shows each step as it happens.
-      </p>
-      <p v-else>
-        No reason was recorded.
-      </p>
-      <div class="panel__unfinished-actions">
-        <button type="button" class="btn role-secondary" data-testid="idr-panel-close" @click="close">
-          Close
-        </button>
-        <button
-          v-if="onDelete && !confirmingDelete"
-          type="button"
-          class="btn role-secondary"
-          data-testid="idr-panel-delete"
-          @click="confirmingDelete = true"
-        >
-          <i class="icon icon-delete" />
-          Delete this report
-        </button>
-        <template v-else-if="onDelete">
-          <button type="button" class="btn role-secondary" :disabled="deleting" @click="confirmingDelete = false">
-            Cancel
-          </button>
-          <button
-            type="button"
-            class="btn bg-error"
-            :disabled="deleting"
-            data-testid="idr-panel-delete-confirm"
-            @click="remove"
-          >
-            {{ deleting ? 'Deleting…' : 'Delete report' }}
-          </button>
-        </template>
-      </div>
-    </section>
+    <template #body>
+      <div class="panel">
+        <div v-if="loading" class="panel__loading">
+          <i class="icon icon-spinner icon-spin" />
+          <span>Opening the report…</span>
+        </div>
 
-    <Banner v-else-if="error" color="error">
-      {{ error }}
-    </Banner>
+        <section v-else-if="unfinished" class="panel__unfinished" data-testid="idr-unfinished">
+          <h2>
+            {{ unfinished === 'running' ? 'Still being generated' : unfinished === 'failed' ? 'This run failed' : 'This run was stopped' }}
+          </h2>
+          <p v-if="meta.error" class="panel__unfinished-why">
+            {{ meta.error }}
+          </p>
+          <p v-else-if="unfinished === 'running'">
+            The agent is working on it. The page shows each step as it happens.
+          </p>
+          <p v-else>
+            No reason was recorded.
+          </p>
+        </section>
 
-    <template v-else-if="report">
-      <!-- Sticky, so the counts and the filters are never a scroll away from the item you are reading. -->
-      <div class="panel__intro">
-        <header class="panel__head" data-testid="idr-report-panel">
-          <div class="panel__identity">
-            <p class="panel__eyebrow">
-              Daily interrupt duty
+        <Banner v-else-if="error" color="error">
+          {{ error }}
+        </Banner>
+
+        <template v-else-if="report">
+          <div class="panel__intro" data-testid="idr-report-panel">
+            <p v-if="headline" class="panel__headline">
+              {{ headline }}
             </p>
-            <!--
-              The summary's date, not the payload's. They agree - publish.sh copies one into the
-              other - but the summary's is the one the calendar placed this square on, and a
-              panel that disagrees with the square you just clicked is worse than either being
-              wrong on its own.
-            -->
-            <h2 class="panel__date">
-              {{ meta.reportDate }}
-            </h2>
+
             <p class="panel__generated">
               Generated {{ whenLabel(meta.finishedAt || meta.startedAt) }}
               <template v-if="meta.startedBy"> · by {{ meta.startedBy }}</template>
             </p>
-          </div>
-          <div class="panel__tools">
-            <button
-              v-if="onWatch && meta.session"
-              type="button"
-              class="panel__watch"
-              title="Open the conversation that wrote this report"
-              data-testid="idr-panel-watch"
-              @click="onWatch(meta)"
-            >
-              <i class="icon icon-terminal" />
-              Agent session
-            </button>
-            <CopyButton :text="asText" :label="activeClass === 'ALL' ? 'Copy whole report' : 'Copy what is shown'" />
-            <button
-              type="button"
-              class="panel__close"
-              title="Close"
-              aria-label="Close the report"
-              data-testid="idr-panel-close"
-              @click="close"
-            >
-              <i class="icon icon-close" />
-            </button>
-            <template v-if="onDelete">
-              <template v-if="confirmingDelete">
-                <button type="button" class="btn btn-sm role-secondary" :disabled="deleting" @click="confirmingDelete = false">
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  class="btn btn-sm bg-error"
-                  :disabled="deleting"
-                  data-testid="idr-panel-delete-confirm"
-                  @click="remove"
-                >
-                  {{ deleting ? 'Deleting…' : 'Delete report' }}
-                </button>
-              </template>
-              <button
-                v-else
-                type="button"
-                class="panel__delete"
-                title="Delete this report"
-                data-testid="idr-panel-delete"
-                @click="confirmingDelete = true"
-              >
-                <i class="icon icon-delete" />
-              </button>
-            </template>
-          </div>
-        </header>
 
-        <p v-if="headline" class="panel__headline">
-          {{ headline }}
-        </p>
-
-        <p v-if="delta" class="panel__delta" data-testid="idr-delta">
-          <span v-if="delta.fresh.size" class="panel__delta-new">
-            <strong>{{ delta.fresh.size }}</strong> new since {{ delta.previousDate }}
-          </span>
-          <span v-else>Nothing new since {{ delta.previousDate }}</span>
-          <span v-if="delta.carried.size">· <strong>{{ delta.carried.size }}</strong> carried over</span>
-          <span v-if="delta.clearedCount">· <strong>{{ delta.clearedCount }}</strong> cleared</span>
-        </p>
+            <p v-if="delta" class="panel__delta" data-testid="idr-delta">
+              <span v-if="delta.fresh.size" class="panel__delta-new">
+                <strong>{{ delta.fresh.size }}</strong> new since {{ delta.previousDate }}
+              </span>
+              <span v-else>Nothing new since {{ delta.previousDate }}</span>
+              <span v-if="delta.carried.size">· <strong>{{ delta.carried.size }}</strong> carried over</span>
+              <span v-if="delta.clearedCount">· <strong>{{ delta.clearedCount }}</strong> cleared</span>
+            </p>
 
         <div class="panel__filters" role="group" aria-label="Filter items by class">
           <button
@@ -544,13 +472,59 @@ const asText = computed(() => {
           />
         </section>
       </div>
+      </template>
+      </div>
     </template>
-  </div>
+
+    <!--
+      Beside the Close the chrome already draws. What acts on the whole report belongs in the
+      footer rather than in the scrolling body, which is where Rancher's own drawers put it.
+    -->
+    <template #additional-actions>
+      <template v-if="report">
+        <CopyButton :text="asText" :label="activeClass === 'ALL' ? 'Copy whole report' : 'Copy what is shown'" />
+        <RcButton
+          v-if="onWatch && meta.session"
+          variant="secondary"
+          size="large"
+          data-testid="idr-panel-watch"
+          @click="onWatch(meta)"
+        >
+          Agent session
+        </RcButton>
+      </template>
+
+      <template v-if="onDelete && confirmingDelete">
+        <RcButton variant="secondary" size="large" :disabled="deleting" @click="confirmingDelete = false">
+          Cancel
+        </RcButton>
+        <RcButton
+          variant="primary"
+          size="large"
+          class="panel__confirm-delete"
+          :disabled="deleting"
+          data-testid="idr-panel-delete-confirm"
+          @click="remove"
+        >
+          {{ deleting ? 'Deleting…' : 'Delete report' }}
+        </RcButton>
+      </template>
+      <RcButton
+        v-else-if="onDelete"
+        variant="secondary"
+        size="large"
+        data-testid="idr-panel-delete"
+        @click="confirmingDelete = true"
+      >
+        Delete
+      </RcButton>
+    </template>
+  </Drawer>
 </template>
 
 <style lang="scss" scoped>
 .panel {
-  padding: 0 4px 48px;
+  padding: 0;
 
   &__loading {
     display: flex;
@@ -582,95 +556,36 @@ const asText = computed(() => {
     color: var(--error) !important;
   }
 
-  &__unfinished-actions {
-    display: flex;
-    gap: 10px;
-  }
 
-  // Deliberately not sticky. A header that shrinks as you scroll has to be measured by anything
-  // that scrolls to a position under it, and a measurement that changes is a measurement that
-  // goes wrong - it put section titles behind the header twice. It scrolls away like the rest of
-  // the page, and the filters are a scroll up rather than a permanent strip.
+  // Scrolls with the body. The chrome's title bar is the only fixed thing, which is the whole
+  // reason this is built on it rather than on a header of our own: a header that shrinks as you
+  // scroll has to be measured by anything scrolling beneath it, and a measurement that changes
+  // is a measurement that goes wrong.
   &__intro {
-    padding: 2px 0 12px;
+    padding: 0 0 12px;
     border-bottom: 1px solid var(--border);
-  }
-
-  &__head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 20px;
-  }
-
-  &__eyebrow {
-    margin: 0;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
-
-  &__date {
-    margin: 1px 0 3px;
-    font-size: 24px;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-  }
-
-  &__tools {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
-  }
-
-  &__watch {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 3px 10px;
-    border-radius: 4px;
-    border: 1px solid var(--border);
-    background: var(--body-bg);
-    color: var(--body-text);
-    font-size: 12px;
-    line-height: 18px;
-    cursor: pointer;
-
-    &:hover {
-      border-color: var(--link);
-      color: var(--link);
-    }
-  }
-
-  &__delete,
-  &__close {
-    border: none;
-    background: transparent;
-    color: var(--muted);
-    cursor: pointer;
-    padding: 5px;
-    border-radius: 4px;
-
-    &:hover {
-      background: var(--nav-bg);
-    }
-  }
-
-  &__delete:hover {
-    color: var(--error);
-  }
-
-  &__close:hover {
-    color: var(--body-text);
   }
 
   &__generated {
     margin: 0;
     font-size: 11px;
     color: var(--muted);
+  }
+
+  // The copy control is ours rather than an RcButton, because it reports back - "Copied" for a
+  // moment after a click - which a plain button cannot. In the footer it has to stand at the
+  // same height as the buttons beside it or the row reads as misaligned.
+  :deep(.copy-button) {
+    height: 40px;
+    padding: 0 14px;
+    font-size: 14px;
+    border-radius: 4px;
+  }
+
+  // RcButton has no destructive variant, so the confirm is coloured rather than shaped.
+  &__confirm-delete {
+    background-color: var(--error);
+    border-color: var(--error);
   }
 
   &__headline {

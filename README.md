@@ -13,10 +13,10 @@ copy and send.
   data, analyses it against the report specification, and publishes the result. While it runs,
   the row shows which of the four steps it is on — read from the files the run has produced, not
   guessed from the terminal.
-- **Watch the agent** — opens the run in the **Agents drawer**, where agent conversations
-  already live. It stays openable for 30 minutes after a run finishes, which is when the
-  transcript is most worth reading — the agent explains the judgment calls the report itself
-  does not carry.
+- **Watch the agent** — opens the run's conversation as a live terminal, in the same Rancher
+  drawer the report opens in. It stays openable for 30 minutes after a run finishes, which is
+  when the transcript is most worth reading — the agent explains the judgment calls the report
+  itself does not carry.
 - **Stop** — ends the run in flight.
 - **Delete** — on each row in the list view, and inside the report in both views. A calendar
   square is a hundred pixels wide with no room for a button and its confirmation, so there the
@@ -157,25 +157,27 @@ improvise, and `publish.sh` refuses to publish a `report.json` that is not a val
 
 ### Watching the agent
 
-A run is an ordinary **drawer conversation**, named `Daily report <date>`, so it appears in the
-Agents drawer's tab strip beside everything else. The Agents extension also offers *project*
-conversations, which its drawer deliberately excludes so that a workspace's chatter never fills
-that strip — but a report is the other case: there is one a day, somebody wants to read it while
-it works, and a second terminal of our own would be a second place to look for the same thing.
+The pane is the Agents extension's own terminal component, placed in a drawer of this
+extension's — the pattern `dev-extension` uses to put a conversation under a pull-request
+comment, and the one thing that extension publishes for others to borrow. Nothing here owns a
+terminal: not the socket protocol, not the reconnect, not the image paste or the clickable
+paths. There is one terminal in this dashboard and one place it is fixed.
 
-The drawer is opened through the only two things that extension offers a stranger: the state it
-keeps in `localStorage`, and the chord it listens for. Its panel is a Vue app mounted on the
-body, and reaching into that for a method to call is the kind of coupling that breaks on
-somebody else's release — so this does not. What that costs is bounded and honest: a drawer
-being built for the first time reads the stored tab and lands on it, and one that has already
-chosen a tab prefers its own from then on, so the page says which tab to click instead. Every
-conversation is named for its date, which makes that followable.
+Two details in `AgentTerminal.vue` are less obvious than they look, and both come from that
+precedent. The API is **awaited**, not read once — extensions load in whatever order Rancher
+loaded them, so reading at mount reports "not installed" for one that is merely slower. And the
+pane's container must be a flex column with **`min-height: 0`** all the way down, or the
+terminal grows the page instead of sizing itself to the drawer.
 
-Conversations are ended 30 minutes after their run finishes, and only ones this extension
-recorded on a report it created — never by listing the pod's conversations and pruning, which
-would now be pruning somebody else's work. The window is a **time**, not "is somebody looking at
-it", because looking at it is per-tab: another open tab of this page runs its own loop, knows
-nothing about this one, and would end the session out from under it.
+What this deliberately does *not* do is drive the Agents extension's own drawer. That was tried:
+it meant reaching for state and a keystroke that extension never published, and it put this
+extension's conversations in a tab strip meant for its own. Runs are **project** conversations
+(`p-interrupt-duty-<n>`), which its drawer excludes by design, and they are shown here instead.
+
+Conversations are swept 30 minutes after their run ends, rather than the instant it ends. The
+window is a **time**, not "is somebody looking at it", because looking at it is per-tab: another
+open tab of this page runs its own loop, knows nothing about this one's open drawer, and would
+end the session out from under it.
 
 ## The report specification
 
