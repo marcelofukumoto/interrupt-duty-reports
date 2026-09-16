@@ -10,13 +10,15 @@
 // the month: four steps do not fit in a calendar square, and what a run is doing right now
 // matters more than where it will eventually land.
 import {
-  computed, onBeforeUnmount, onMounted, ref,
+  computed, onBeforeUnmount, onMounted, ref, watch,
 } from 'vue';
 import { useStore } from 'vuex';
 import { Banner } from '@components/Banner';
+import ButtonGroup from '@shell/components/ButtonGroup';
 import CalendarGrid from '../components/CalendarGrid.vue';
 import CredentialsDialog from '../components/CredentialsDialog.vue';
 import ReportPanel from '../components/ReportPanel.vue';
+import ReportRow from '../components/ReportRow.vue';
 import RunProgress from '../components/RunProgress.vue';
 import TrendTile from '../components/TrendTile.vue';
 import { agentsStatus, whenAgentsReady } from '../lib/agents';
@@ -28,7 +30,12 @@ import {
   runProgress, startRun, stopRun, sweepFinishedRuns, sweepRunDirectories,
 } from '../lib/run';
 import type { RunProgress as Progress } from '../lib/run';
-import { actNowTrend, elapsedLabel, isStale, searchText } from '../lib/format';
+import {
+  actNowTrend, DAY_GROUP_ORDER, dayGroup, elapsedLabel, isStale, searchText,
+} from '../lib/format';
+import type { DayGroup } from '../lib/format';
+import { loadView, saveView } from '../lib/view-preference';
+import type { ReportsView } from '../lib/view-preference';
 import type { ReportMeta } from '../types';
 
 const store = useStore();
@@ -50,6 +57,26 @@ const remembered = ref({ jiraPat: '', ghToken: '' });
 
 const now = new Date();
 const shown = ref({ year: now.getUTCFullYear(), month: now.getUTCMonth() });
+
+/**
+ * Calendar or list, remembered.
+ *
+ * The calendar is the default because the shape of the month is what a daily report is for, but
+ * the list is better when what you want is the reports in the order they were written - so the
+ * choice is somebody's to make and is kept for next time.
+ */
+const view = ref<ReportsView>(loadView());
+
+watch(view, saveView);
+
+const VIEW_OPTIONS = [
+  {
+    value: 'calendar', icon: 'icon-apps', tooltip: 'Calendar', ariaLabel: 'Show the reports on a calendar',
+  },
+  {
+    value: 'list', icon: 'icon-list-flat', tooltip: 'List', ariaLabel: 'Show the reports as a list',
+  },
+];
 
 const POLL_RUNNING_MS = 4000;
 const POLL_IDLE_MS = 45000;
@@ -98,6 +125,30 @@ const matchesElsewhere = computed(() => {
  * Worked out here rather than in the panel because only this page holds the whole list, and the
  * panel is handed one report.
  */
+/** The list view's own shape: matching reports, newest first, in dated groups. */
+const groups = computed(() => {
+  const today = new Date();
+  const visible = matched.value
+    ? reports.value.filter((r) => matched.value?.has(r.id))
+    : reports.value;
+  const buckets = new Map<DayGroup, ReportMeta[]>();
+
+  for (const report of visible) {
+    const group = dayGroup(report.reportDate, today);
+    const bucket = buckets.get(group);
+
+    if (bucket) {
+      bucket.push(report);
+    } else {
+      buckets.set(group, [report]);
+    }
+  }
+
+  return DAY_GROUP_ORDER
+    .filter((name) => buckets.has(name))
+    .map((name) => ({ name, reports: buckets.get(name)! }));
+});
+
 const previousComplete = computed(() => {
   const map = new Map<string, ReportMeta>();
   const complete = reports.value.filter((r) => r.status === 'complete');
@@ -407,24 +458,34 @@ function open(meta: ReportMeta) {
         <div class="idr__toolbar">
           <TrendTile v-if="trend.length > 1" :points="trend" />
 
-          <label class="idr__search">
-            <i class="icon icon-search" />
-            <input
-              ref="searchBox"
-              v-model="query"
-              type="search"
-              placeholder="Search by date, ticket or summary…"
-              aria-label="Search reports"
-              data-testid="idr-search"
-            >
-            <kbd v-if="!query">/</kbd>
-            <button v-else type="button" class="idr__search-clear" aria-label="Clear the search" @click="query = ''">
-              <i class="icon icon-close" />
-            </button>
-          </label>
+          <div class="idr__controls">
+            <ButtonGroup
+              v-model:value="view"
+              :options="VIEW_OPTIONS"
+              size="small"
+              icon-size="sm"
+              data-testid="idr-view-toggle"
+            />
+
+            <label class="idr__search">
+              <i class="icon icon-search" />
+              <input
+                ref="searchBox"
+                v-model="query"
+                type="search"
+                placeholder="Search by date, ticket or summary…"
+                aria-label="Search reports"
+                data-testid="idr-search"
+              >
+              <kbd v-if="!query">/</kbd>
+              <button v-else type="button" class="idr__search-clear" aria-label="Clear the search" @click="query = ''">
+                <i class="icon icon-close" />
+              </button>
+            </label>
+          </div>
         </div>
 
-        <p v-if="matched" class="idr__matches" data-testid="idr-matches">
+        <p v-if="matched && view === 'calendar'" class="idr__matches" data-testid="idr-matches">
           <template v-if="matched.size">
             <strong>{{ matched.size }}</strong>
             {{ matched.size === 1 ? 'report matches' : 'reports match' }} “{{ query }}”
@@ -438,6 +499,7 @@ function open(meta: ReportMeta) {
         </p>
 
         <CalendarGrid
+          v-if="view === 'calendar'"
           :reports="reports"
           :year="shown.year"
           :month="shown.month"
@@ -445,6 +507,26 @@ function open(meta: ReportMeta) {
           @open="open"
           @month="shown = $event"
         />
+
+        <template v-else>
+          <p v-if="!groups.length" class="idr__nomatch">
+            No report matches “{{ query }}”.
+          </p>
+          <section v-for="group in groups" :key="group.name" class="idr__group">
+            <h2 class="idr__group-title">
+              {{ group.name }}
+              <span class="idr__group-count">{{ group.reports.length }}</span>
+            </h2>
+            <ul class="idr__list">
+              <ReportRow
+                v-for="report in group.reports"
+                :key="report.id"
+                :meta="report"
+                @open="open"
+              />
+            </ul>
+          </section>
+        </template>
       </template>
 
       <p class="idr__foot">
@@ -590,6 +672,15 @@ function open(meta: ReportMeta) {
     margin-bottom: 16px;
   }
 
+  &__controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    justify-content: flex-end;
+    min-width: 260px;
+  }
+
   &__search {
     position: relative;
     display: flex;
@@ -648,6 +739,44 @@ function open(meta: ReportMeta) {
     &:hover {
       color: var(--body-text);
     }
+  }
+
+  &__group {
+    margin-bottom: 20px;
+  }
+
+  &__group-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 8px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  &__group-count {
+    font-weight: 600;
+    letter-spacing: 0;
+    opacity: 0.8;
+  }
+
+  &__list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  &__nomatch {
+    margin: 0 0 16px;
+    padding: 18px;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    font-size: 13px;
+    text-align: center;
   }
 
   &__matches {

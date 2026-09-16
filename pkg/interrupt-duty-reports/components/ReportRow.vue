@@ -1,0 +1,291 @@
+<script setup lang="ts">
+// One report, as a row.
+//
+// The alternative to the calendar, for the days when what you want is the reports in the order
+// they were written rather than the shape of the month. The row is built around the one number
+// somebody scanning for work needs - how many items are owed a move - with the rest of the
+// counts kept quiet beside it.
+//
+// It carries neither the run's progress nor a delete control, and both for the same reason: the
+// page shows a run in flight in a strip above whichever view is open, and deleting happens
+// inside the report. Duplicating either here would mean two places showing one thing, and two
+// places to keep right.
+import { computed } from 'vue';
+import { countChips, elapsedLabel, statusStyle, whenLabel } from '../lib/format';
+import type { ReportMeta } from '../types';
+
+const props = defineProps<{
+  meta: ReportMeta;
+}>();
+
+const emit = defineEmits<{
+  (e: 'open', meta: ReportMeta): void;
+}>();
+
+const status = computed(() => statusStyle(props.meta.status));
+const openable = computed(() => props.meta.status === 'complete');
+const chips = computed(() => countChips(props.meta));
+</script>
+
+<template>
+  <li
+    class="row"
+    :class="{ 'is-open': openable, 'is-running': meta.status === 'running' }"
+    :style="{ '--row-color': `var(${ status.colorVar })` }"
+    data-testid="idr-report-row"
+  >
+    <component
+      :is="openable ? 'button' : 'div'"
+      :type="openable ? 'button' : undefined"
+      class="row__body"
+      :aria-label="openable ? `Open the report for ${ meta.reportDate }` : undefined"
+      @click="openable && emit('open', meta)"
+    >
+      <div class="row__lead">
+        <span class="row__date">{{ meta.reportDate }}</span>
+        <span class="row__status">
+          <i v-if="meta.status === 'running'" class="icon icon-spinner icon-spin" />
+          {{ status.label }}
+        </span>
+        <span class="row__spacer" />
+        <span class="row__when">
+          {{ whenLabel(meta.startedAt) }}
+          <template v-if="meta.status !== 'running'"> · {{ elapsedLabel(meta) }}</template>
+        </span>
+      </div>
+
+      <p v-if="meta.error" class="row__error">
+        <i class="icon icon-warning" />
+        {{ meta.error }}
+      </p>
+
+      <p v-else-if="meta.status === 'running'" class="row__pending">
+        Gathering the day's Jira and GitHub state, then writing the report…
+      </p>
+
+      <template v-else-if="meta.counts">
+        <div class="row__metrics">
+          <span
+            class="row__actnow"
+            :class="{ 'is-clear': !meta.actNow }"
+            :title="meta.actNow ? `${ meta.actNow } items need a move today` : 'Nothing is waiting on us'"
+          >
+            <strong>{{ meta.actNow || 0 }}</strong>
+            {{ meta.actNow === 1 ? 'needs action' : 'need action' }}
+          </span>
+          <ul class="row__chips">
+            <li v-for="chip in chips" :key="chip.label" :class="{ 'is-zero': !chip.value }">
+              <strong>{{ chip.value }}</strong> {{ chip.label.toLowerCase() }}
+            </li>
+          </ul>
+        </div>
+
+        <ul v-if="meta.top3 && meta.top3.length" class="row__top">
+          <li v-for="top in meta.top3" :key="top.ref" :title="top.title">
+            {{ top.ref }}
+          </li>
+        </ul>
+      </template>
+    </component>
+
+    <div class="row__side">
+      <i v-if="openable" class="icon icon-chevron-right row__chevron" />
+    </div>
+  </li>
+</template>
+
+<style lang="scss" scoped>
+.row {
+  display: flex;
+  align-items: stretch;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--row-color);
+  border-radius: 6px;
+  background: var(--body-bg);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+  &.is-open:hover,
+  &.is-open:focus-within {
+    border-color: var(--link);
+    box-shadow: 0 1px 8px rgba(0, 0, 0, 0.1);
+
+    .row__chevron {
+      color: var(--link);
+      transform: translateX(2px);
+    }
+  }
+
+  // Keyboard focus rings the whole row, not the button inside it.
+  //
+  // The clickable area is only the left two thirds - the delete control sits outside it - so the
+  // browser's own outline drew a box that stopped short of the row's right edge and read as a
+  // divider through the middle of it. The outline is moved to the row and kept just as visible.
+  &.is-open:focus-within {
+    outline: 2px solid var(--link);
+    outline-offset: 1px;
+  }
+
+  &.is-running {
+    border-left-color: var(--info);
+  }
+
+  &__body {
+    flex: 1;
+    min-width: 0;
+    display: block;
+    width: 100%;
+    padding: 12px 8px 12px 14px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    font: inherit;
+    cursor: default;
+
+    &:focus-visible {
+      outline: none;
+    }
+  }
+
+  &.is-open &__body {
+    cursor: pointer;
+  }
+
+  &__lead {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  &__date {
+    font-size: 16px;
+    font-weight: 600;
+    // Tabular here, unlike the trend tile's value: these are a column of dates that must line
+    // up down the list.
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__status {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--row-color);
+  }
+
+  &__spacer {
+    flex: 1;
+  }
+
+  &__when {
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  &__pending {
+    margin: 6px 0 0;
+    font-size: 12px;
+    line-height: 18px;
+    color: var(--muted);
+  }
+
+  &__error {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin: 6px 0 0;
+    font-size: 12px;
+    line-height: 18px;
+    color: var(--error);
+  }
+
+  &__metrics {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    margin-top: 8px;
+  }
+
+  &__actnow {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    padding: 2px 10px;
+    border-radius: 11px;
+    background: var(--error);
+    color: var(--body-bg);
+    font-size: 11px;
+    white-space: nowrap;
+
+    strong {
+      font-size: 13px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    // Nothing owed is good news and should look like it, not like a red badge reading zero.
+    &.is-clear {
+      background: transparent;
+      border: 1px solid var(--success);
+      color: var(--success);
+    }
+  }
+
+  &__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 11px;
+    color: var(--muted);
+
+    strong {
+      color: var(--body-text);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .is-zero {
+      opacity: 0.45;
+    }
+  }
+
+  &__top {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 7px 0 0;
+    padding: 0;
+    list-style: none;
+
+    li {
+      font-family: var(--font-family-mono, monospace);
+      font-size: 10px;
+      color: var(--muted);
+      padding: 1px 6px;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+    }
+  }
+
+  &__side {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px 0 4px;
+    flex-shrink: 0;
+  }
+
+  &__chevron {
+    color: var(--muted);
+    transition: transform 0.15s ease, color 0.15s ease;
+  }
+
+}
+</style>

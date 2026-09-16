@@ -22,6 +22,20 @@ Reports are kept as ConfigMaps, so they survive a pod restart, a Rancher restart
 reinstall of this extension. The newest **100** are retained; publishing the 101st removes the
 oldest.
 
+### Two views
+
+A toggle beside the search box switches between them, and the choice is remembered in
+`localStorage` for next time. The **calendar** is the default.
+
+| View | What it is for |
+| --- | --- |
+| **Calendar** | The shape of the month — which days had a report, which were quiet, which were missed. |
+| **List** | The reports in the order they were written, grouped by Today / Yesterday / This week / Earlier. |
+
+Search behaves differently in each, on purpose: the list **filters** to the matching reports,
+while the calendar **dims** the days it did not match — a day that had a report still had one,
+and removing it would make the month look emptier than it was.
+
 ### The calendar
 
 Reports are laid out on the month they were written for, because a report is a daily thing and
@@ -35,12 +49,10 @@ encoded, so the colour is the second way of reading a square and never the only 
 are drawn recessively, days from the neighbouring month faintly, and a run that failed shows as
 itself rather than as an absence.
 
-Above it sits a stat tile: what is owed today, the change since the previous report, and the
-trend across the last dozen. It has no hover layer — every day's count is already printed in
-its own square below, so a tile that changed what it said as the pointer crossed it would have
-been motion in exchange for nothing. Search (`/` focuses it) **dims** the days it did not match rather
-than hiding them — a day that had a report still had one, and removing it would make the month
-look emptier than it was.
+Above both views sits a stat tile: what is owed today, the change since the previous report,
+and the trend across the last dozen. It has no hover layer — every day's count is already
+printed in its own square below, so a tile that changed what it said as the pointer crossed it
+would have been motion in exchange for nothing.
 
 ### Reading a report
 
