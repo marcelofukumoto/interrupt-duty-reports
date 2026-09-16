@@ -6,11 +6,14 @@
 // somebody scanning for work needs - how many items are owed a move - with the rest of the
 // counts kept quiet beside it.
 //
-// It carries neither the run's progress nor a delete control, and both for the same reason: the
-// page shows a run in flight in a strip above whichever view is open, and deleting happens
-// inside the report. Duplicating either here would mean two places showing one thing, and two
-// places to keep right.
-import { computed } from 'vue';
+// It does not draw the run's progress: a run in flight gets a strip above whichever view is
+// open, and drawing it twice would be two places to keep right.
+//
+// It does carry a delete control, which the calendar's squares cannot - a hundred pixels has no
+// room for a button and its confirmation. Deleting a report that failed is pure housekeeping:
+// there is nothing in it to read, so making somebody open it first to get rid of it is a detour
+// through a page that exists to say "there is nothing here".
+import { computed, ref } from 'vue';
 import { countChips, elapsedLabel, statusStyle, whenLabel } from '../lib/format';
 import type { ReportMeta } from '../types';
 
@@ -20,26 +23,44 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'open', meta: ReportMeta): void;
+  (e: 'delete', meta: ReportMeta): void;
 }>();
 
+const confirming = ref(false);
+const deleting = ref(false);
+
 const status = computed(() => statusStyle(props.meta.status));
-const openable = computed(() => props.meta.status === 'complete');
 const chips = computed(() => countChips(props.meta));
+
+/**
+ * Every report opens, whatever became of it.
+ *
+ * Only completed ones used to, which left a failed run as a row that could not be clicked - and
+ * since deleting happened inside the report, a failed run could not be deleted either. A run
+ * that failed still has something to say, which is why it failed.
+ */
+function open() {
+  emit('open', props.meta);
+}
+
+function remove() {
+  deleting.value = true;
+  emit('delete', props.meta);
+}
 </script>
 
 <template>
   <li
     class="row"
-    :class="{ 'is-open': openable, 'is-running': meta.status === 'running' }"
+    :class="{ 'is-running': meta.status === 'running' }"
     :style="{ '--row-color': `var(${ status.colorVar })` }"
     data-testid="idr-report-row"
   >
-    <component
-      :is="openable ? 'button' : 'div'"
-      :type="openable ? 'button' : undefined"
+    <button
+      type="button"
       class="row__body"
-      :aria-label="openable ? `Open the report for ${ meta.reportDate }` : undefined"
-      @click="openable && emit('open', meta)"
+      :aria-label="`Open the report for ${ meta.reportDate }`"
+      @click="open"
     >
       <div class="row__lead">
         <span class="row__date">{{ meta.reportDate }}</span>
@@ -86,10 +107,36 @@ const chips = computed(() => countChips(props.meta));
           </li>
         </ul>
       </template>
-    </component>
+    </button>
 
     <div class="row__side">
-      <i v-if="openable" class="icon icon-chevron-right row__chevron" />
+      <i class="icon icon-chevron-right row__chevron" />
+
+      <template v-if="confirming">
+        <button type="button" class="btn btn-sm role-secondary" :disabled="deleting" @click.stop="confirming = false">
+          Cancel
+        </button>
+        <button
+          type="button"
+          class="btn btn-sm bg-error"
+          :disabled="deleting"
+          data-testid="idr-delete-confirm"
+          @click.stop="remove"
+        >
+          {{ deleting ? 'Deleting…' : 'Delete' }}
+        </button>
+      </template>
+      <button
+        v-else
+        type="button"
+        class="row__delete"
+        :aria-label="`Delete the report for ${ meta.reportDate }`"
+        title="Delete this report"
+        data-testid="idr-delete"
+        @click.stop="confirming = true"
+      >
+        <i class="icon icon-delete" />
+      </button>
     </div>
   </li>
 </template>
@@ -105,8 +152,8 @@ const chips = computed(() => countChips(props.meta));
   background: var(--body-bg);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 
-  &.is-open:hover,
-  &.is-open:focus-within {
+  &:hover,
+  &:focus-within {
     border-color: var(--link);
     box-shadow: 0 1px 8px rgba(0, 0, 0, 0.1);
 
@@ -118,10 +165,10 @@ const chips = computed(() => countChips(props.meta));
 
   // Keyboard focus rings the whole row, not the button inside it.
   //
-  // The clickable area is only the left two thirds - the delete control sits outside it - so the
+  // The clickable area is only the left part - the delete control sits outside it - so the
   // browser's own outline drew a box that stopped short of the row's right edge and read as a
   // divider through the middle of it. The outline is moved to the row and kept just as visible.
-  &.is-open:focus-within {
+  &:focus-within {
     outline: 2px solid var(--link);
     outline-offset: 1px;
   }
@@ -141,15 +188,11 @@ const chips = computed(() => countChips(props.meta));
     color: inherit;
     text-align: left;
     font: inherit;
-    cursor: default;
+    cursor: pointer;
 
     &:focus-visible {
       outline: none;
     }
-  }
-
-  &.is-open &__body {
-    cursor: pointer;
   }
 
   &__lead {
@@ -285,6 +328,20 @@ const chips = computed(() => countChips(props.meta));
   &__chevron {
     color: var(--muted);
     transition: transform 0.15s ease, color 0.15s ease;
+  }
+
+  &__delete {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 4px;
+
+    &:hover {
+      color: var(--error);
+      background: var(--nav-bg);
+    }
   }
 
 }

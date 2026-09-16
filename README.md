@@ -14,9 +14,11 @@ copy and send.
   the row shows which of the four steps it is on — read from the files the run has produced, not
   guessed from the terminal.
 - **Stop** — ends the run in flight.
-- **Delete** — removes one report, from inside the report itself: a calendar square is a
-  hundred pixels wide with no room for a control and its confirmation, and the moment somebody
-  wants a report gone is the moment they have just read it.
+- **Delete** — on each row in the list view, and inside the report in both views. A calendar
+  square is a hundred pixels wide with no room for a button and its confirmation, so there the
+  way to it is to open the report; a list row has the room, and deleting a run that failed is
+  pure housekeeping — there is nothing in it to read, so making somebody open it first would be
+  a detour through a page that exists to say "there is nothing here".
 
 Reports are kept as ConfigMaps, so they survive a pod restart, a Rancher restart and a
 reinstall of this extension. The newest **100** are retained; publishing the 101st removes the
@@ -74,8 +76,8 @@ The panel is also opened without a `title`, because setting one makes Rancher's
 `SlideInPanelManager` draw its own header bar, which does not scroll either; the panel carries
 its own heading and close button instead, and Escape and the backdrop close it as always.
 
-A run that failed or was stopped opens too, showing why and offering to delete itself, rather
-than being a square you cannot click.
+A run that failed or was stopped opens too — in both views — showing why and offering to delete
+itself, rather than being a row or a square that does nothing when clicked.
 
 ## Requirements
 

@@ -523,6 +523,7 @@ function open(meta: ReportMeta) {
                 :key="report.id"
                 :meta="report"
                 @open="open"
+                @delete="remove"
               />
             </ul>
           </section>
