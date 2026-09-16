@@ -80,8 +80,10 @@ function run() {
       <label class="creds__field">
         <span class="creds__label">GitHub token</span>
         <span class="creds__hint">
-          Classic token with the <code>public_repo</code> scope, or a fine-grained token with
-          read access to Issues and Pull requests on <code>rancher/dashboard</code>.
+          Read-only, public access is all it needs: a classic token with the
+          <code>public_repo</code> scope, or a fine-grained token with
+          <em>Public repositories (read-only)</em>. It never writes — no issue is opened,
+          commented on or labelled.
         </span>
         <span class="creds__input">
           <input
@@ -183,6 +185,11 @@ function run() {
   &__hint {
     display: block;
     color: var(--muted);
+
+    em {
+      font-style: normal;
+      color: var(--body-text);
+    }
     font-size: 12px;
     line-height: 17px;
     margin-bottom: 6px;

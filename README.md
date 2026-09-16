@@ -42,12 +42,20 @@ dialog when you press Generate.
 | Token | What it is | What it needs |
 | --- | --- | --- |
 | `JIRA_PAT` | A Jira personal access token from `jira.suse.com` → Profile → **Personal Access Tokens** | Read access to the `SURE` project |
-| `GH_TOKEN` | A GitHub token | **Classic:** the `public_repo` scope. **Fine-grained:** read access to *Issues* and *Pull requests* on `rancher/dashboard` |
+| `GH_TOKEN` | A GitHub token | **Classic:** the `public_repo` scope. **Fine-grained:** *Public repositories (read-only)* |
 
-`rancher/dashboard` is a public repository, and the daily report does not touch Dependabot
-alerts (those are a separate process), so the GitHub token needs **read access to public
-repository issues and nothing more**. It never writes: no issue is opened, commented on or
-labelled by this extension.
+**Read-only public access is all it needs.** `rancher/dashboard` is a public repository, and
+the daily report deliberately does not touch Dependabot alerts — those are a separate process,
+and reading them would need `security_events` plus repo-admin rights on a repository nobody
+here owns.
+
+The gather makes exactly one GitHub call: a read-only GraphQL query for the repository's open
+issues. Nothing is ever written — no issue is opened, commented on or labelled by this
+extension, and the suggested comments are for you to paste yourself.
+
+> A fine-grained token cannot be scoped to `rancher/dashboard` specifically unless that
+> organization has opted your account in, so *Public repositories (read-only)* is the
+> fine-grained equivalent.
 
 #### Why they are not stored
 
@@ -123,9 +131,20 @@ yarn build-pkg interrupt-duty-reports
 scripts are written into the pod from that generated file on **every run**, so an edit under
 `seed/` that has not been regenerated is an edit that never reaches the pod.
 
+## Installing
+
+In Rancher, go to **Apps → Repositories**, add an `http(s)` repository pointing at
+
+```
+https://marcelofukumoto.github.io/interrupt-duty-reports/
+```
+
+then open **Extensions** and install **Interrupt Duty Reports**. Install
+[Agents][agents] the same way if it is not there yet.
+
 ## Publishing
 
 Pushing a change to `pkg/interrupt-duty-reports/package.json`'s `version` on `main` builds the
 extension and publishes it to the `gh-pages` branch as a Helm repository, using
-`rancher/dashboard`'s own reusable workflow. Add the Pages URL under **Apps → Repositories** and
-the extension appears in **Extensions**.
+`rancher/dashboard`'s own reusable workflow. The version is the whole of publishing — a chart
+version is meant to be immutable, so a push that does not change it republishes nothing.
