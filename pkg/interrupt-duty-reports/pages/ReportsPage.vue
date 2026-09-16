@@ -300,7 +300,10 @@ function open(meta: ReportMeta) {
   store.commit('slideInPanel/open', {
     component:      ReportPanel,
     componentProps: {
-      title: `Daily report · ${ meta.reportDate }`,
+      // No `title`, deliberately. Setting one makes SlideInPanelManager draw its own header
+      // bar, which does not scroll with the panel - so the report would still have had a strip
+      // pinned above it after its own sticky header was taken out. The panel carries its own
+      // heading and close control instead, and Escape and the backdrop close it as always.
       width: 'wide',
       meta,
       previousId:   previous?.id,

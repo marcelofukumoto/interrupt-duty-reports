@@ -36,7 +36,9 @@ are drawn recessively, days from the neighbouring month faintly, and a run that 
 itself rather than as an absence.
 
 Above it sits a stat tile: what is owed today, the change since the previous report, and the
-trend across the last dozen. Search (`/` focuses it) **dims** the days it did not match rather
+trend across the last dozen. It has no hover layer — every day's count is already printed in
+its own square below, so a tile that changed what it said as the pointer crossed it would have
+been motion in exchange for nothing. Search (`/` focuses it) **dims** the days it did not match rather
 than hiding them — a day that had a report still had one, and removing it would make the month
 look emptier than it was.
 
@@ -53,10 +55,12 @@ Clicking a day opens it in a wide slide-in, where two things do most of the work
   cleared, and the new ones are badged. It costs one extra ConfigMap read and nothing from the
   agent — the report format is unchanged.
 
-The panel header is deliberately **not** sticky. A header that shrinks as you scroll has to be
-measured by anything scrolling to a position beneath it, and a measurement that changes is a
-measurement that goes wrong — it put section titles behind the header twice before the idea was
-abandoned. It scrolls away like the rest of the page.
+**Nothing in the panel is pinned.** A header that shrinks as you scroll has to be measured by
+anything scrolling to a position beneath it, and a measurement that changes is a measurement
+that goes wrong — it put section titles behind the header twice before the idea was abandoned.
+The panel is also opened without a `title`, because setting one makes Rancher's
+`SlideInPanelManager` draw its own header bar, which does not scroll either; the panel carries
+its own heading and close button instead, and Escape and the backdrop close it as always.
 
 A run that failed or was stopped opens too, showing why and offering to delete itself, rather
 than being a square you cannot click.

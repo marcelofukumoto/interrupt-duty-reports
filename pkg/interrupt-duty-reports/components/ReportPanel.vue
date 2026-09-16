@@ -38,10 +38,8 @@ const props = defineProps<{
    * The slide-in's own configuration, declared so that it is consumed rather than inherited.
    *
    * SlideInPanelManager hands the component everything it was opened with, and an undeclared
-   * prop falls through onto the root element - which put a literal `title` attribute on this
-   * div and gave the whole panel a browser tooltip on hover.
+   * prop falls through onto the root element as a real HTML attribute.
    */
-  title?: string;
   width?: string;
   /**
    * Removing this report, handed in by the page that owns the list.
@@ -66,6 +64,10 @@ const deleting = ref(false);
 /** A run that did not finish has no report to show, and says what happened instead. */
 const unfinished = computed(() => (props.meta.status === 'complete' ? null : props.meta.status));
 
+function close() {
+  store.commit('slideInPanel/close');
+}
+
 async function remove() {
   if (!props.onDelete || deleting.value) {
     return;
@@ -75,7 +77,7 @@ async function remove() {
 
   try {
     await props.onDelete(props.meta);
-    store.commit('slideInPanel/close');
+    close();
   } catch (e: any) {
     error.value = e?.message || String(e);
     deleting.value = false;
@@ -315,9 +317,12 @@ const asText = computed(() => {
       <p v-else>
         No reason was recorded.
       </p>
-      <div v-if="onDelete" class="panel__unfinished-actions">
+      <div class="panel__unfinished-actions">
+        <button type="button" class="btn role-secondary" data-testid="idr-panel-close" @click="close">
+          Close
+        </button>
         <button
-          v-if="!confirmingDelete"
+          v-if="onDelete && !confirmingDelete"
           type="button"
           class="btn role-secondary"
           data-testid="idr-panel-delete"
@@ -326,7 +331,7 @@ const asText = computed(() => {
           <i class="icon icon-delete" />
           Delete this report
         </button>
-        <template v-else>
+        <template v-else-if="onDelete">
           <button type="button" class="btn role-secondary" :disabled="deleting" @click="confirmingDelete = false">
             Cancel
           </button>
@@ -371,6 +376,16 @@ const asText = computed(() => {
           </div>
           <div class="panel__tools">
             <CopyButton :text="asText" :label="activeClass === 'ALL' ? 'Copy whole report' : 'Copy what is shown'" />
+            <button
+              type="button"
+              class="panel__close"
+              title="Close"
+              aria-label="Close the report"
+              data-testid="idr-panel-close"
+              @click="close"
+            >
+              <i class="icon icon-close" />
+            </button>
             <template v-if="onDelete">
               <template v-if="confirmingDelete">
                 <button type="button" class="btn btn-sm role-secondary" :disabled="deleting" @click="confirmingDelete = false">
@@ -598,7 +613,8 @@ const asText = computed(() => {
     flex-shrink: 0;
   }
 
-  &__delete {
+  &__delete,
+  &__close {
     border: none;
     background: transparent;
     color: var(--muted);
@@ -607,9 +623,16 @@ const asText = computed(() => {
     border-radius: 4px;
 
     &:hover {
-      color: var(--error);
       background: var(--nav-bg);
     }
+  }
+
+  &__delete:hover {
+    color: var(--error);
+  }
+
+  &__close:hover {
+    color: var(--body-text);
   }
 
   &__generated {
