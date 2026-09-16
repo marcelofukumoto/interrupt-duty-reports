@@ -161,39 +161,6 @@ export const PHASE_LABEL: Record<string, string> = {
 };
 
 /**
- * Which day a report belongs under in the list.
- *
- * Grouped rather than listed flat because a hundred rows all headed by a date is a hundred rows
- * that look identical; what somebody scanning wants first is whether there is one for today.
- * Compared on the calendar date the report is *for*, which is UTC, against the reader's own
- * today - a report generated at 01:00 local is still yesterday's report to the person reading
- * it, and saying otherwise would be a lie told by a timezone.
- */
-export type DayGroup = 'Today' | 'Yesterday' | 'This week' | 'Earlier';
-
-export function dayGroup(reportDate: string, now = new Date()): DayGroup {
-  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const parsed = Date.parse(`${ reportDate }T00:00:00Z`);
-
-  if (Number.isNaN(parsed)) {
-    return 'Earlier';
-  }
-
-  const days = Math.round((today.getTime() - parsed) / 86400000);
-
-  if (days <= 0) {
-    return 'Today';
-  }
-  if (days === 1) {
-    return 'Yesterday';
-  }
-
-  return days <= 7 ? 'This week' : 'Earlier';
-}
-
-export const DAY_GROUP_ORDER: DayGroup[] = ['Today', 'Yesterday', 'This week', 'Earlier'];
-
-/**
  * Everything a row can be searched by, lowercased.
  *
  * The refs matter as much as the date: "was SURE-11670 on a report last week" is the question
@@ -221,21 +188,4 @@ export function actNowTrend(reports: ReportMeta[], points = 12): { date: string;
     .slice(0, points)
     .reverse()
     .map((r) => ({ date: r.reportDate, value: r.actNow as number }));
-}
-
-/** The count chips on a list row, in the order the report itself puts them. */
-export function countChips(meta: ReportMeta): { label: string; value: number }[] {
-  const counts = meta.counts;
-
-  if (!counts) {
-    return [];
-  }
-
-  return [
-    { label: 'New', value: counts.jira_new },
-    { label: 'In triage', value: counts.jira_in_triage },
-    { label: 'Waiting', value: counts.jira_waiting_reporter },
-    { label: 'GitHub', value: counts.github_new },
-    { label: 'Questions', value: counts.github_questions },
-  ];
 }

@@ -1,21 +1,23 @@
 <script setup lang="ts">
-// The whole extension, as a page: the three buttons and the list of reports.
+// The whole extension, as a page: the buttons, the run in flight, and the month.
 //
-// Generate and Stop sit in the header, because there is only ever one run in flight and it
-// belongs to the page rather than to any row. Delete is per report, because that is what
-// deleting a report means.
+// Laid out as a calendar rather than a list because a report is a daily thing, and the question
+// a list cannot answer is the one people have - did this happen every day. A row that is missing
+// looks exactly like a row nobody scrolled to; an empty square is a gap you can see.
 //
-// Nothing is polled when nothing is happening. A run in flight is watched every few seconds -
-// the agent publishes into the cluster and the row follows it - and a settled list is refreshed
-// only when the page is opened or somebody asks.
+// Generate and Stop are in the header, because there is only ever one run in flight and it
+// belongs to the page rather than to any day. A run in progress gets a strip of its own above
+// the month: four steps do not fit in a calendar square, and what a run is doing right now
+// matters more than where it will eventually land.
 import {
   computed, onBeforeUnmount, onMounted, ref,
 } from 'vue';
 import { useStore } from 'vuex';
 import { Banner } from '@components/Banner';
+import CalendarGrid from '../components/CalendarGrid.vue';
 import CredentialsDialog from '../components/CredentialsDialog.vue';
 import ReportPanel from '../components/ReportPanel.vue';
-import ReportRow from '../components/ReportRow.vue';
+import RunProgress from '../components/RunProgress.vue';
 import TrendTile from '../components/TrendTile.vue';
 import { agentsStatus, whenAgentsReady } from '../lib/agents';
 import type { AgentsStatus } from '../lib/agents';
@@ -25,11 +27,8 @@ import {
 import {
   runProgress, startRun, stopRun, sweepFinishedRuns, sweepRunDirectories,
 } from '../lib/run';
-import type { RunProgress } from '../lib/run';
-import {
-  actNowTrend, DAY_GROUP_ORDER, dayGroup, isStale, searchText,
-} from '../lib/format';
-import type { DayGroup } from '../lib/format';
+import type { RunProgress as Progress } from '../lib/run';
+import { actNowTrend, elapsedLabel, isStale, searchText } from '../lib/format';
 import type { ReportMeta } from '../types';
 
 const store = useStore();
@@ -43,13 +42,14 @@ const error = ref('');
 const askingForTokens = ref(false);
 const starting = ref(false);
 const stopping = ref(false);
-const progress = ref<RunProgress | null>(null);
-const deleting = ref<string | null>(null);
-const confirmingDelete = ref<string | null>(null);
+const progress = ref<Progress | null>(null);
 const query = ref('');
 const searchBox = ref<HTMLInputElement | null>(null);
 /** The tab's memory of the two tokens, so a second report in one sitting is one click. */
 const remembered = ref({ jiraPat: '', ghToken: '' });
+
+const now = new Date();
+const shown = ref({ year: now.getUTCFullYear(), month: now.getUTCMonth() });
 
 const POLL_RUNNING_MS = 4000;
 const POLL_IDLE_MS = 45000;
@@ -65,42 +65,38 @@ const activeRun = computed(() => reports.value.find((r) => r.status === 'running
 const canGenerate = computed(() => agents.value.state === 'ready' && !activeRun.value && !starting.value);
 const trend = computed(() => actNowTrend(reports.value));
 
-const matching = computed(() => {
+/** Which reports a search matched. Null when nothing is being searched for. */
+const matched = computed<Set<string> | null>(() => {
   const needle = query.value.trim().toLowerCase();
 
   if (!needle) {
-    return reports.value;
+    return null;
   }
 
-  return reports.value.filter((report) => searchText(report).includes(needle));
+  return new Set(reports.value.filter((r) => searchText(r).includes(needle)).map((r) => r.id));
 });
 
-/** The list, in dated groups, with empty groups dropped rather than shown as headings. */
-const groups = computed(() => {
-  const now = new Date();
-  const buckets = new Map<DayGroup, ReportMeta[]>();
-
-  for (const report of matching.value) {
-    const group = dayGroup(report.reportDate, now);
-    const bucket = buckets.get(group);
-
-    if (bucket) {
-      bucket.push(report);
-    } else {
-      buckets.set(group, [report]);
-    }
+const matchesElsewhere = computed(() => {
+  if (!matched.value) {
+    return 0;
   }
 
-  return DAY_GROUP_ORDER
-    .filter((name) => buckets.has(name))
-    .map((name) => ({ name, reports: buckets.get(name)! }));
+  return reports.value.filter((r) => {
+    if (!matched.value?.has(r.id)) {
+      return false;
+    }
+
+    const [year, month] = r.reportDate.split('-').map(Number);
+
+    return year !== shown.value.year || month - 1 !== shown.value.month;
+  }).length;
 });
 
 /**
  * The report each one is compared against: the next complete report older than it.
  *
- * Worked out here rather than in the panel because only the list knows the order, and the panel
- * is handed one report.
+ * Worked out here rather than in the panel because only this page holds the whole list, and the
+ * panel is handed one report.
  */
 const previousComplete = computed(() => {
   const map = new Map<string, ReportMeta>();
@@ -134,7 +130,7 @@ async function refresh() {
  * it. Neither goes away on its own, so a hundred reports would be a hundred of each.
  *
  * Best-effort, and never surfaced: this is housekeeping, and a pod that has just restarted
- * failing to answer it is not something to put a red banner over a list that is otherwise fine.
+ * failing to answer it is not something to put a red banner over a month that is otherwise fine.
  */
 async function sweep() {
   const running = reports.value.filter((r) => r.status === 'running');
@@ -247,6 +243,8 @@ async function generate(credentials: { jiraPat: string; ghToken: string }) {
 
     previousRun = started.id;
     askingForTokens.value = false;
+    // A run always lands on today, so that is the month to be looking at.
+    shown.value = { year: new Date().getUTCFullYear(), month: new Date().getUTCMonth() };
     await refresh();
     restartPolling();
   } catch (e: any) {
@@ -281,23 +279,18 @@ async function stop() {
 }
 
 async function remove(meta: ReportMeta) {
-  deleting.value = meta.id;
-
   try {
-    // A report still running is a conversation still running: ending it first means deleting a
-    // row cannot leave a claude in the pod working on something nothing will ever read.
+    // A report still running is a conversation still running: ending it first means deleting it
+    // cannot leave a claude in the pod working on something nothing will ever read.
     if (meta.status === 'running') {
       await stopRun(meta).catch(() => undefined);
     }
 
     await deleteReport(meta.id);
-    confirmingDelete.value = null;
     await refresh();
     await sweep();
   } catch (e: any) {
     error.value = e?.message || String(e);
-  } finally {
-    deleting.value = null;
   }
 }
 
@@ -312,6 +305,7 @@ function open(meta: ReportMeta) {
       meta,
       previousId:   previous?.id,
       previousDate: previous?.reportDate,
+      onDelete:     remove,
     },
   });
 }
@@ -357,9 +351,9 @@ function open(meta: ReportMeta) {
     </header>
 
     <!--
-      The agent's state is a one-line note while it is fine and a banner only when it is not.
-      A full-width green bar saying everything works is a bar that is on screen every second of
-      every day to report an absence of news, and it pushed the actual content down with it.
+      The agent's state is a one-line note while it is fine and a banner only when it is not. A
+      full-width green bar saying everything works is a bar that is on screen every second of
+      every day to report an absence of news.
     -->
     <Banner
       v-if="agents.state !== 'ready' && agents.state !== 'checking'"
@@ -373,13 +367,26 @@ function open(meta: ReportMeta) {
       {{ error }}
     </Banner>
 
+    <section v-if="activeRun" class="idr__running" data-testid="idr-running">
+      <div class="idr__running-head">
+        <i class="icon icon-spinner icon-spin" />
+        <strong>Generating the report for {{ activeRun.reportDate }}</strong>
+        <span>{{ elapsedLabel(activeRun) }}</span>
+      </div>
+      <RunProgress
+        :phase="progress?.phase || 'starting'"
+        :output="progress?.output || ''"
+        :elapsed="elapsedLabel(activeRun)"
+      />
+    </section>
+
     <div v-if="loading" class="idr__loading">
       <i class="icon icon-spinner icon-spin" />
       <span>Loading reports…</span>
     </div>
 
-    <template v-else-if="!reports.length">
-      <section class="idr__empty" data-testid="idr-empty">
+    <template v-else>
+      <section v-if="!reports.length" class="idr__empty" data-testid="idr-empty">
         <h2>No reports yet</h2>
         <p>
           Generating one takes a couple of minutes. The agent in this cluster reads the day's
@@ -388,56 +395,54 @@ function open(meta: ReportMeta) {
         </p>
         <ol class="idr__steps">
           <li><strong>Generate</strong> — you supply a Jira and a GitHub token for the run.</li>
-          <li><strong>Watch it work</strong> — the row shows each step as it happens.</li>
-          <li><strong>Open the report</strong> — act on it, copying the drafted comments.</li>
+          <li><strong>Watch it work</strong> — the four steps show as they happen.</li>
+          <li><strong>Open the day</strong> — act on it, copying the drafted comments.</li>
         </ol>
       </section>
-    </template>
 
-    <template v-else>
-      <div class="idr__toolbar">
-        <TrendTile v-if="trend.length > 1" :points="trend" />
+      <template v-else>
+        <div class="idr__toolbar">
+          <TrendTile v-if="trend.length > 1" :points="trend" />
 
-        <label class="idr__search">
-          <i class="icon icon-search" />
-          <input
-            ref="searchBox"
-            v-model="query"
-            type="search"
-            placeholder="Search by date, ticket or summary…"
-            aria-label="Search reports"
-            data-testid="idr-search"
-          >
-          <kbd v-if="!query">/</kbd>
-          <button v-else type="button" class="idr__search-clear" aria-label="Clear the search" @click="query = ''">
-            <i class="icon icon-close" />
-          </button>
-        </label>
-      </div>
+          <label class="idr__search">
+            <i class="icon icon-search" />
+            <input
+              ref="searchBox"
+              v-model="query"
+              type="search"
+              placeholder="Search by date, ticket or summary…"
+              aria-label="Search reports"
+              data-testid="idr-search"
+            >
+            <kbd v-if="!query">/</kbd>
+            <button v-else type="button" class="idr__search-clear" aria-label="Clear the search" @click="query = ''">
+              <i class="icon icon-close" />
+            </button>
+          </label>
+        </div>
 
-      <p v-if="query && !matching.length" class="idr__nomatch">
-        No report matches “{{ query }}”.
-      </p>
+        <p v-if="matched" class="idr__matches" data-testid="idr-matches">
+          <template v-if="matched.size">
+            <strong>{{ matched.size }}</strong>
+            {{ matched.size === 1 ? 'report matches' : 'reports match' }} “{{ query }}”
+            <template v-if="matchesElsewhere">
+              · <strong>{{ matchesElsewhere }}</strong> in another month
+            </template>
+          </template>
+          <template v-else>
+            No report matches “{{ query }}”.
+          </template>
+        </p>
 
-      <section v-for="group in groups" :key="group.name" class="idr__group">
-        <h2 class="idr__group-title">
-          {{ group.name }}
-          <span class="idr__group-count">{{ group.reports.length }}</span>
-        </h2>
-        <ul class="idr__list">
-          <ReportRow
-            v-for="report in group.reports"
-            :key="report.id"
-            :meta="report"
-            :progress="activeRun && activeRun.id === report.id ? progress : null"
-            :deleting="deleting === report.id"
-            :confirming="confirmingDelete === report.id"
-            @open="open"
-            @confirm-delete="confirmingDelete = $event"
-            @delete="remove"
-          />
-        </ul>
-      </section>
+        <CalendarGrid
+          :reports="reports"
+          :year="shown.year"
+          :month="shown.month"
+          :matched="matched"
+          @open="open"
+          @month="shown = $event"
+        />
+      </template>
 
       <p class="idr__foot">
         <span v-if="agents.state === 'ready'" class="idr__agents">
@@ -506,6 +511,32 @@ function open(meta: ReportMeta) {
     flex-shrink: 0;
   }
 
+  &__running {
+    margin-bottom: 18px;
+    padding: 12px 16px;
+    border: 1px solid var(--info);
+    border-radius: 8px;
+    background: var(--body-bg);
+  }
+
+  &__running-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+
+    .icon {
+      color: var(--info);
+    }
+
+    span {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+  }
+
   &__loading {
     display: flex;
     align-items: center;
@@ -553,7 +584,7 @@ function open(meta: ReportMeta) {
     justify-content: space-between;
     gap: 16px;
     flex-wrap: wrap;
-    margin-bottom: 18px;
+    margin-bottom: 16px;
   }
 
   &__search {
@@ -616,42 +647,15 @@ function open(meta: ReportMeta) {
     }
   }
 
-  &__nomatch {
-    margin: 0 0 16px;
-    padding: 18px;
-    border: 1px dashed var(--border);
-    border-radius: 6px;
+  &__matches {
+    margin: 0 0 12px;
+    font-size: 12px;
     color: var(--muted);
-    font-size: 13px;
-    text-align: center;
-  }
 
-  &__group {
-    margin-bottom: 20px;
-  }
-
-  &__group-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 0 0 8px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
-
-  &__group-count {
-    font-weight: 600;
-    letter-spacing: 0;
-    opacity: 0.8;
-  }
-
-  &__list {
-    margin: 0;
-    padding: 0;
-    list-style: none;
+    strong {
+      color: var(--body-text);
+      font-variant-numeric: tabular-nums;
+    }
   }
 
   &__foot {

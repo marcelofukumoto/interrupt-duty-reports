@@ -14,9 +14,8 @@
 //
 // The payload is fetched here rather than handed in, because the list only ever holds
 // summaries - a hundred rows of dates must not mean a hundred reports downloaded.
-import {
-  computed, nextTick, onBeforeUnmount, onMounted, ref,
-} from 'vue';
+import { computed, onMounted, ref } from 'vue';
+import { useStore } from 'vuex';
 import { Banner } from '@components/Banner';
 import ItemCard from './ItemCard.vue';
 import CopyButton from './CopyButton.vue';
@@ -44,6 +43,14 @@ const props = defineProps<{
    */
   title?: string;
   width?: string;
+  /**
+   * Removing this report, handed in by the page that owns the list.
+   *
+   * Delete lives here rather than on the calendar square because a square is a hundred pixels
+   * wide with no room for a control and its confirmation, and because the moment somebody
+   * actually wants a report gone is the moment they have just read it.
+   */
+  onDelete?: (meta: ReportMeta) => Promise<void> | void;
 }>();
 
 const report = ref<Report | null>(null);
@@ -51,40 +58,38 @@ const delta = ref<ReportDelta | null>(null);
 const error = ref('');
 const loading = ref(true);
 const activeClass = ref<ItemClass | 'ALL'>('ALL');
-const body = ref<HTMLElement | null>(null);
-const root = ref<HTMLElement | null>(null);
-const stickyEl = ref<HTMLElement | null>(null);
-/**
- * Whether the header has given up its explanatory half.
- *
- * Everything in the header earns its place on arrival - what this report is, when it ran, the
- * headline, what changed since yesterday - and none of it earns a third of the panel for the
- * next twenty items. So once the body is scrolling, the header keeps only what is still being
- * used: which report this is, the filters, and the way back to a section.
- */
-const condensed = ref(false);
+const store = useStore();
 
-let scroller: HTMLElement | null = null;
+const confirmingDelete = ref(false);
+const deleting = ref(false);
 
-function onScroll() {
-  condensed.value = (scroller?.scrollTop || 0) > 48;
-}
+/** A run that did not finish has no report to show, and says what happened instead. */
+const unfinished = computed(() => (props.meta.status === 'complete' ? null : props.meta.status));
 
-/** The slide-in owns the scroll container, so it is found rather than declared. */
-function findScroller(from: HTMLElement | null): HTMLElement | null {
-  let node = from?.parentElement || null;
-
-  while (node && node !== document.body) {
-    if (node.scrollHeight > node.clientHeight + 8 && /auto|scroll/.test(getComputedStyle(node).overflowY)) {
-      return node;
-    }
-    node = node.parentElement;
+async function remove() {
+  if (!props.onDelete || deleting.value) {
+    return;
   }
 
-  return null;
+  deleting.value = true;
+
+  try {
+    await props.onDelete(props.meta);
+    store.commit('slideInPanel/close');
+  } catch (e: any) {
+    error.value = e?.message || String(e);
+    deleting.value = false;
+    confirmingDelete.value = false;
+  }
 }
 
 onMounted(async() => {
+  if (unfinished.value) {
+    loading.value = false;
+
+    return;
+  }
+
   try {
     const loaded = await getReport(props.meta.id);
 
@@ -99,11 +104,6 @@ onMounted(async() => {
     loading.value = false;
   }
 
-  // Once there is something to scroll, which is only true after the report has rendered.
-  await nextTick();
-  scroller = findScroller(root.value);
-  scroller?.addEventListener('scroll', onScroll, { passive: true });
-
   // After the report and never blocking it: the difference is useful context, and a previous
   // report that has since been deleted is a reason to show no badges, not an error.
   if (report.value && props.previousId) {
@@ -113,7 +113,6 @@ onMounted(async() => {
   }
 });
 
-onBeforeUnmount(() => scroller?.removeEventListener('scroll', onScroll));
 
 const headline = computed(() => report.value?.reminder?.line || props.meta.headline || '');
 
@@ -242,33 +241,6 @@ function chipsFor(section: { kind: string }, item: AnyItem) {
 }
 
 /**
- * Scroll a section to just under the header.
- *
- * Not `scrollIntoView`, and not a `scroll-margin-top` either, because the thing being cleared
- * changes height: the header is in its tall form at the top of the panel and its short one
- * everywhere else, so any fixed margin is wrong at one end or the other - and when it was too
- * small the section title landed *behind* the header, which looked like the jump had missed.
- *
- * So the header is put into its scrolled form first - the panel is about to be scrolled away
- * from the top regardless - and measured once it is, and the offset computed from that.
- */
-async function jump(key: string) {
-  const section = body.value?.querySelector(`[data-section="${ key }"]`);
-
-  if (!section || !scroller) {
-    return;
-  }
-
-  condensed.value = true;
-  await nextTick();
-
-  const clearance = (stickyEl.value?.getBoundingClientRect().height || 0) + 12;
-  const offset = section.getBoundingClientRect().top - scroller.getBoundingClientRect().top;
-
-  scroller.scrollTo({ top: scroller.scrollTop + offset - clearance, behavior: 'smooth' });
-}
-
-/**
  * The whole report as text, for pasting somewhere that is not this page.
  *
  * The reports used to be markdown files read in pull requests and in chat, so the one thing the
@@ -282,7 +254,7 @@ const asText = computed(() => {
     return '';
   }
 
-  const lines: string[] = [`Daily Interrupt Duty Report — ${ r.report_date }`, ''];
+  const lines: string[] = [`Daily Interrupt Duty Report — ${ props.meta.reportDate }`, ''];
 
   if (r.reminder?.line) {
     lines.push(r.reminder.line, '');
@@ -323,11 +295,53 @@ const asText = computed(() => {
 </script>
 
 <template>
-  <div ref="root" class="panel">
+  <div class="panel">
     <div v-if="loading" class="panel__loading">
       <i class="icon icon-spinner icon-spin" />
       <span>Opening the report…</span>
     </div>
+
+    <section v-else-if="unfinished" class="panel__unfinished" data-testid="idr-unfinished">
+      <h2>
+        {{ meta.reportDate }} —
+        {{ unfinished === 'running' ? 'still being generated' : unfinished === 'failed' ? 'this run failed' : 'this run was stopped' }}
+      </h2>
+      <p v-if="meta.error" class="panel__unfinished-why">
+        {{ meta.error }}
+      </p>
+      <p v-else-if="unfinished === 'running'">
+        The agent is working on it. The page shows each step as it happens.
+      </p>
+      <p v-else>
+        No reason was recorded.
+      </p>
+      <div v-if="onDelete" class="panel__unfinished-actions">
+        <button
+          v-if="!confirmingDelete"
+          type="button"
+          class="btn role-secondary"
+          data-testid="idr-panel-delete"
+          @click="confirmingDelete = true"
+        >
+          <i class="icon icon-delete" />
+          Delete this report
+        </button>
+        <template v-else>
+          <button type="button" class="btn role-secondary" :disabled="deleting" @click="confirmingDelete = false">
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="btn bg-error"
+            :disabled="deleting"
+            data-testid="idr-panel-delete-confirm"
+            @click="remove"
+          >
+            {{ deleting ? 'Deleting…' : 'Delete report' }}
+          </button>
+        </template>
+      </div>
+    </section>
 
     <Banner v-else-if="error" color="error">
       {{ error }}
@@ -335,28 +349,62 @@ const asText = computed(() => {
 
     <template v-else-if="report">
       <!-- Sticky, so the counts and the filters are never a scroll away from the item you are reading. -->
-      <div ref="stickyEl" class="panel__sticky" :class="{ 'is-condensed': condensed }">
+      <div class="panel__intro">
         <header class="panel__head" data-testid="idr-report-panel">
           <div class="panel__identity">
-            <p v-show="!condensed" class="panel__eyebrow">
+            <p class="panel__eyebrow">
               Daily interrupt duty
             </p>
+            <!--
+              The summary's date, not the payload's. They agree - publish.sh copies one into the
+              other - but the summary's is the one the calendar placed this square on, and a
+              panel that disagrees with the square you just clicked is worse than either being
+              wrong on its own.
+            -->
             <h2 class="panel__date">
-              {{ report.report_date }}
+              {{ meta.reportDate }}
             </h2>
-            <p v-show="!condensed" class="panel__generated">
+            <p class="panel__generated">
               Generated {{ whenLabel(meta.finishedAt || meta.startedAt) }}
               <template v-if="meta.startedBy"> · by {{ meta.startedBy }}</template>
             </p>
           </div>
-          <CopyButton :text="asText" :label="activeClass === 'ALL' ? 'Copy whole report' : 'Copy what is shown'" />
+          <div class="panel__tools">
+            <CopyButton :text="asText" :label="activeClass === 'ALL' ? 'Copy whole report' : 'Copy what is shown'" />
+            <template v-if="onDelete">
+              <template v-if="confirmingDelete">
+                <button type="button" class="btn btn-sm role-secondary" :disabled="deleting" @click="confirmingDelete = false">
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm bg-error"
+                  :disabled="deleting"
+                  data-testid="idr-panel-delete-confirm"
+                  @click="remove"
+                >
+                  {{ deleting ? 'Deleting…' : 'Delete report' }}
+                </button>
+              </template>
+              <button
+                v-else
+                type="button"
+                class="panel__delete"
+                title="Delete this report"
+                data-testid="idr-panel-delete"
+                @click="confirmingDelete = true"
+              >
+                <i class="icon icon-delete" />
+              </button>
+            </template>
+          </div>
         </header>
 
-        <p v-if="headline" v-show="!condensed" class="panel__headline">
+        <p v-if="headline" class="panel__headline">
           {{ headline }}
         </p>
 
-        <p v-if="delta" v-show="!condensed" class="panel__delta" data-testid="idr-delta">
+        <p v-if="delta" class="panel__delta" data-testid="idr-delta">
           <span v-if="delta.fresh.size" class="panel__delta-new">
             <strong>{{ delta.fresh.size }}</strong> new since {{ delta.previousDate }}
           </span>
@@ -390,21 +438,9 @@ const asText = computed(() => {
             {{ entry.style.label }} <span>{{ entry.count }}</span>
           </button>
         </div>
+</div>
 
-        <nav class="panel__nav" aria-label="Jump to a section">
-          <button
-            v-for="section in sections"
-            :key="section.key"
-            type="button"
-            :disabled="!section.items.length"
-            @click="jump(section.key)"
-          >
-            {{ section.title.replace(' · ', ' ') }} <span>{{ section.items.length }}</span>
-          </button>
-        </nav>
-      </div>
-
-      <div ref="body" class="panel__body">
+      <div class="panel__body">
         <ul v-if="tiles.length && activeClass === 'ALL'" class="panel__tiles">
           <li v-for="tile in tiles" :key="tile.label" :class="{ 'is-zero': !tile.value }">
             <span class="panel__tile-value">{{ tile.value }}</span>
@@ -496,18 +532,40 @@ const asText = computed(() => {
     color: var(--muted);
   }
 
-  &__sticky {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    padding: 2px 0 10px;
-    background: var(--body-bg);
-    border-bottom: 1px solid var(--border);
+  &__unfinished {
+    padding: 28px 4px;
 
-    &.is-condensed {
-      padding-bottom: 8px;
-      box-shadow: 0 4px 10px -6px rgba(0, 0, 0, 0.45);
+    h2 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      font-weight: 600;
     }
+
+    p {
+      margin: 0 0 18px;
+      max-width: 62ch;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 20px;
+    }
+  }
+
+  &__unfinished-why {
+    color: var(--error) !important;
+  }
+
+  &__unfinished-actions {
+    display: flex;
+    gap: 10px;
+  }
+
+  // Deliberately not sticky. A header that shrinks as you scroll has to be measured by anything
+  // that scrolls to a position under it, and a measurement that changes is a measurement that
+  // goes wrong - it put section titles behind the header twice. It scrolls away like the rest of
+  // the page, and the filters are a scroll up rather than a permanent strip.
+  &__intro {
+    padding: 2px 0 12px;
+    border-bottom: 1px solid var(--border);
   }
 
   &__head {
@@ -531,16 +589,27 @@ const asText = computed(() => {
     font-size: 24px;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
-    transition: font-size 0.15s ease, margin 0.15s ease;
   }
 
-  &__sticky.is-condensed &__date {
-    font-size: 17px;
-    margin: 0;
+  &__tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
   }
 
-  &__sticky.is-condensed &__filters {
-    margin-top: 8px;
+  &__delete {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 5px;
+    border-radius: 4px;
+
+    &:hover {
+      color: var(--error);
+      background: var(--nav-bg);
+    }
   }
 
   &__generated {
@@ -619,40 +688,6 @@ const asText = computed(() => {
       span,
       .icon {
         color: var(--body-bg);
-      }
-    }
-  }
-
-  &__nav {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 14px;
-    margin-top: 10px;
-
-    button {
-      display: inline-flex;
-      align-items: baseline;
-      gap: 5px;
-      border: none;
-      background: transparent;
-      padding: 0;
-      font-size: 11px;
-      color: var(--link);
-      cursor: pointer;
-
-      span {
-        color: var(--muted);
-        font-variant-numeric: tabular-nums;
-      }
-
-      &:hover:not(:disabled) {
-        text-decoration: underline;
-      }
-
-      &:disabled {
-        color: var(--muted);
-        opacity: 0.5;
-        cursor: default;
       }
     }
   }

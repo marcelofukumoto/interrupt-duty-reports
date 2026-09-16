@@ -14,15 +14,35 @@ copy and send.
   the row shows which of the four steps it is on — read from the files the run has produced, not
   guessed from the terminal.
 - **Stop** — ends the run in flight.
-- **Delete** — removes one report.
+- **Delete** — removes one report, from inside the report itself: a calendar square is a
+  hundred pixels wide with no room for a control and its confirmation, and the moment somebody
+  wants a report gone is the moment they have just read it.
 
 Reports are kept as ConfigMaps, so they survive a pod restart, a Rancher restart and a
 reinstall of this extension. The newest **100** are retained; publishing the 101st removes the
 oldest.
 
+### The calendar
+
+Reports are laid out on the month they were written for, because a report is a daily thing and
+the question a list cannot answer is the one people have: *did we do this every day*. A row
+that is missing looks exactly like a row nobody scrolled to; an empty square is a gap you can
+see.
+
+Each square carries the number that matters — how many items were owed a move that day — and is
+tinted from it, a five-step sequential scale across the grid. The number is printed as well as
+encoded, so the colour is the second way of reading a square and never the only one. Weekends
+are drawn recessively, days from the neighbouring month faintly, and a run that failed shows as
+itself rather than as an absence.
+
+Above it sits a stat tile: what is owed today, the change since the previous report, and the
+trend across the last dozen. Search (`/` focuses it) **dims** the days it did not match rather
+than hiding them — a day that had a report still had one, and removing it would make the month
+look emptier than it was.
+
 ### Reading a report
 
-The report opens in a wide slide-in, and three things there do most of the work:
+Clicking a day opens it in a wide slide-in, where two things do most of the work:
 
 - **Filter by class.** On a busy day a report is thirty items and you almost always want one
   subset of them — usually *Act now*. The chips filter every section at once, the section
@@ -32,13 +52,14 @@ The report opens in a wide slide-in, and three things there do most of the work:
   report is compared against this one, the header says how many are new, carried over and
   cleared, and the new ones are badged. It costs one extra ConfigMap read and nothing from the
   agent — the report format is unchanged.
-- **A header that stays.** The date, the filters and the section jumps stay put while the body
-  scrolls, shrinking once you are past the top so they cost a strip rather than a third of the
-  panel.
 
-The list itself groups by day, is searchable by date, ticket reference or summary (`/` focuses
-the box), and leads with a stat tile: how many items are owed a move today, the change since
-the previous report, and the trend across the last dozen.
+The panel header is deliberately **not** sticky. A header that shrinks as you scroll has to be
+measured by anything scrolling to a position beneath it, and a measurement that changes is a
+measurement that goes wrong — it put section titles behind the header twice before the idea was
+abandoned. It scrolls away like the rest of the page.
+
+A run that failed or was stopped opens too, showing why and offering to delete itself, rather
+than being a square you cannot click.
 
 ## Requirements
 
