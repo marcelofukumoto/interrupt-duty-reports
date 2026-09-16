@@ -506,7 +506,7 @@ function open(meta: ReportMeta) {
           @click="openGenerate"
         >
           <i class="icon icon-play" />
-          Generate report
+          <span>Generate report</span>
         </button>
         <button
           type="button"
@@ -517,7 +517,7 @@ function open(meta: ReportMeta) {
           @click="stop"
         >
           <i class="icon icon-close" />
-          {{ stopping ? 'Stopping…' : 'Stop' }}
+          <span>{{ stopping ? 'Stopping…' : 'Stop' }}</span>
         </button>
         <button
           type="button"
@@ -527,7 +527,7 @@ function open(meta: ReportMeta) {
           @click="manageCredentials"
         >
           <i class="icon icon-key" />
-          Credentials
+          <span>Credentials</span>
         </button>
       </div>
     </header>
