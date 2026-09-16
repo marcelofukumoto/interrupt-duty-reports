@@ -18,7 +18,7 @@ SEED=$(dirname "$0")
 
 [ -d "$DIR" ] || { echo "run.sh: no such run directory: $DIR" >&2; exit 2; }
 
-NS=interrupt-duty-reports
+NS=interrupt-duty-reports-console
 SECRET=settings
 # Extension Studio keeps an account's GitHub token under this exact name. Ours is preferred -
 # setting one here is somebody choosing it for this extension - and theirs is the fallback, so

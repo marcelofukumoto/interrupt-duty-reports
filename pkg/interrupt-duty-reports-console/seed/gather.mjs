@@ -216,7 +216,7 @@ async function graphql(query, variables) {
       Authorization:  `Bearer ${ GH_TOKEN }`,
       'Content-Type': 'application/json',
       Accept:         'application/json',
-      'User-Agent':   'interrupt-duty-reports',
+      'User-Agent':   'interrupt-duty-reports-console',
     },
     body: JSON.stringify({ query, variables }),
   }, 'GitHub GraphQL');

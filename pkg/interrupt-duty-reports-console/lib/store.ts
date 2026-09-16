@@ -20,7 +20,7 @@ import type { Report, ReportMeta, RunStatus } from '../types';
 const CLUSTER = 'local';
 const STEVE = `/k8s/clusters/${ CLUSTER }/v1`;
 
-export const NAMESPACE = 'interrupt-duty-reports';
+export const NAMESPACE = 'interrupt-duty-reports-console';
 
 const LABEL = 'interrupt-duty.rancher.io';
 const LABEL_PART = `${ LABEL }/report`;

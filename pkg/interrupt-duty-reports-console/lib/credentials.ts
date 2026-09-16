@@ -23,7 +23,7 @@
 import { K8S_BASE, rancherFetch } from './rancher';
 
 /** Where this extension keeps its own. The reports live here too. */
-export const CRED_NAMESPACE = 'interrupt-duty-reports';
+export const CRED_NAMESPACE = 'interrupt-duty-reports-console';
 export const CRED_SECRET = 'settings';
 
 /**

@@ -12,7 +12,7 @@ export type ReportsView = 'calendar' | 'list';
 
 export const DEFAULT_VIEW: ReportsView = 'calendar';
 
-const KEY = 'interrupt-duty-reports.view';
+const KEY = 'interrupt-duty-reports-console.view';
 
 function isView(value: unknown): value is ReportsView {
   return value === 'calendar' || value === 'list';

@@ -20,7 +20,7 @@ ID=${2:?publish.sh needs the report id}
 RESULT=${3:?publish.sh needs done or fail}
 MESSAGE=${4:-}
 
-NS=interrupt-duty-reports
+NS=interrupt-duty-reports-console
 LABEL=interrupt-duty.rancher.io
 KEEP=${KEEP_REPORTS:-100}
 
