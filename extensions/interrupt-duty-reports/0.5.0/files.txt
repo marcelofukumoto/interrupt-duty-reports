@@ -1,7 +1,0 @@
-plugin/interrupt-duty-reports-0.5.0.umd.min.362.js
-plugin/interrupt-duty-reports-0.5.0.umd.min.362.js.map
-plugin/interrupt-duty-reports-0.5.0.umd.min.839.js
-plugin/interrupt-duty-reports-0.5.0.umd.min.839.js.map
-plugin/interrupt-duty-reports-0.5.0.umd.min.js
-plugin/interrupt-duty-reports-0.5.0.umd.min.js.map
-plugin/package.json
