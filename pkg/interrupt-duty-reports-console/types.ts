@@ -25,6 +25,10 @@ export interface QuickAction {
 }
 
 export interface JiraItem {
+  /** Days since WE replied - what the nudge rule measures. */
+  idle_days?: number | null;
+  /** Days since the reporter last spoke. Nothing we do resets it. */
+  reporter_silent_days?: number | null;
   key: string;
   url: string;
   title: string;
@@ -40,6 +44,8 @@ export interface JiraItem {
 }
 
 export interface GitHubItem {
+  /** Days since the reporter last spoke. Nothing we do resets it. */
+  reporter_silent_days?: number | null;
   number: number;
   url: string;
   title: string;
@@ -54,6 +60,8 @@ export interface GitHubItem {
 }
 
 export interface QuestionItem {
+  /** Days since the reporter last spoke. Nothing we do resets it. */
+  reporter_silent_days?: number | null;
   number: number;
   url: string;
   title: string;

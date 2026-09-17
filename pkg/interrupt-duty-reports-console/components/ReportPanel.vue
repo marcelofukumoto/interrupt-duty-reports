@@ -188,6 +188,30 @@ const classCounts = computed(() => {
   };
 });
 
+/**
+ * The gap between the two clocks, shown only when it is news.
+ *
+ * `idle_days` is how long since WE replied; `reporter_silent_days` is how long since they did.
+ * While a conversation is going they agree and a second chip would be noise. They come apart
+ * when we have been chasing somebody who stopped answering - SURE-11688 had us replying a week
+ * ago and its reporter silent for a hundred and eleven days - and that is worth a chip,
+ * because the old single number hid exactly this case behind a reassuring "7".
+ */
+function silentChip(item: { idle_days?: number | null; reporter_silent_days?: number | null }) {
+  const quiet = item.reporter_silent_days;
+  const ours = item.idle_days;
+
+  if (quiet === null || quiet === undefined || quiet < 14) {
+    return [];
+  }
+
+  if (ours !== null && ours !== undefined && quiet - ours < 7) {
+    return [];
+  }
+
+  return [{ label: 'Reporter quiet', value: ageLabel(quiet) }];
+}
+
 /** Every section, already filtered, so the nav counts and the body can never disagree. */
 const sections = computed(() => [
   ...jiraGroups.value.map((group) => ({
@@ -227,6 +251,8 @@ function jiraChips(item: JiraItem) {
   return [
     { label: 'Priority', value: item.priority || '' },
     { label: 'Age', value: ageLabel(item.age_days) },
+    { label: 'Since our reply', value: ageLabel(item.idle_days) },
+    ...silentChip(item),
     { label: 'Assignee', value: item.assignee || 'unassigned' },
   ];
 }
@@ -235,7 +261,8 @@ function issueChips(item: GitHubItem) {
   return [
     { label: 'Kind', value: item.kind || '' },
     { label: 'Age', value: ageLabel(item.age_days) },
-    { label: 'Idle', value: ageLabel(item.idle_days) },
+    { label: 'Since our reply', value: ageLabel(item.idle_days) },
+    ...silentChip(item),
     { label: 'Comments', value: item.comments_count === null || item.comments_count === undefined ? '' : String(item.comments_count) },
   ];
 }
@@ -243,7 +270,8 @@ function issueChips(item: GitHubItem) {
 function questionChips(item: QuestionItem) {
   return [
     { label: 'Age', value: ageLabel(item.age_days) },
-    { label: 'Idle', value: ageLabel(item.idle_days) },
+    { label: 'Since our reply', value: ageLabel(item.idle_days) },
+    ...silentChip(item),
   ];
 }
 

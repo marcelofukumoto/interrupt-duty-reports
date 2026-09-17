@@ -134,6 +134,20 @@ function normaliseJira(issues) {
     const comments = f.comment?.comments || [];
     const last = comments[comments.length - 1] || null;
 
+    // Who said what last, told apart. One "idle" number cannot answer both "how long since we
+    // replied" and "how long has the reporter been quiet", and the report needs both: the
+    // nudge rule is about the first, and whether a reporter has gone silent is the second.
+    //
+    // Measured on SURE-11767: the reporter last spoke on 27 July, we replied on 28 July, we
+    // nudged on 17 September. A single idle stamp read 0 that day, so a ticket whose reporter
+    // had been silent for 52 days reported as "too soon for a nudge" - and every nudge after
+    // that would reset it again. The harder we chased, the fresher it looked.
+    const reporterName = f.reporter?.displayName || null;
+    const byReporter = comments.filter((c) => (c.author?.displayName || null) === reporterName);
+    const byUs = comments.filter((c) => (c.author?.displayName || null) !== reporterName);
+    const lastOurs = byUs[byUs.length - 1] || null;
+    const lastTheirs = byReporter[byReporter.length - 1] || null;
+
     return {
       key:         issue.key,
       url:         `${ JIRA_BASE }/browse/${ issue.key }`,
@@ -146,10 +160,12 @@ function normaliseJira(issues) {
       created:     f.created,
       updated:     f.updated,
       age_days:    daysSince(f.created),
-      // Idle is measured from the last comment when there is one, and from the ticket's own
-      // updated stamp when there is not. The report's nudge rule is "idle >= 14 days since we
-      // replied", which is a fact about the conversation, and a field edit is not a reply.
-      idle_days:   daysSince(last?.created || f.updated),
+      // Since WE replied - which is what the nudge rule has always said it measures. It used
+      // to be the last comment by anybody, so our own nudge reset it.
+      idle_days:   daysSince(lastOurs?.created || last?.created || f.updated),
+      // Since the REPORTER last said anything, counted from the ticket if they never have.
+      // This is the one that says whether they have gone quiet, and nothing we do resets it.
+      reporter_silent_days: daysSince(lastTheirs?.created || f.created),
       description: f.description || '',
       // The last three, which is what the prompt reads to decide who owes the next move. The
       // whole thread would be most of this file for no gain.
@@ -198,7 +214,7 @@ query($owner: String!, $name: String!, $cursor: String) {
         number title url createdAt updatedAt authorAssociation
         author { login __typename }
         assignees { totalCount }
-        comments(last: 1) { totalCount nodes { authorAssociation createdAt author { login __typename } } }
+        comments(last: 20) { totalCount nodes { authorAssociation createdAt author { login __typename } } }
         labels(first: 20) { nodes { name } }
         timelineItems(itemTypes: [CROSS_REFERENCED_EVENT], last: 10) {
           nodes { ... on CrossReferencedEvent { source { ... on PullRequest { number state url } } } }
@@ -273,7 +289,15 @@ async function fetchRecentIssues(cutoffMs) {
 }
 
 function normaliseIssue(node) {
-  const lastComment = node.comments?.nodes?.[0] || null;
+  const commentNodes = node.comments?.nodes || [];
+  const lastComment = commentNodes[commentNodes.length - 1] || null;
+
+  // Told apart, the same way the Jira side does it. A bot is automation, not either side.
+  const human = commentNodes.filter((c) => c.author?.__typename !== 'Bot');
+  const ours = human.filter((c) => INTERNAL.has(c.authorAssociation));
+  const theirs = human.filter((c) => !INTERNAL.has(c.authorAssociation));
+  const lastOurs = ours[ours.length - 1] || null;
+  const lastTheirs = theirs[theirs.length - 1] || null;
   const labels = (node.labels?.nodes || []).map((l) => l.name);
   const linkedPrs = (node.timelineItems?.nodes || [])
     .map((t) => t.source)
@@ -302,7 +326,13 @@ function normaliseIssue(node) {
     created_at:               node.createdAt,
     updated_at:               node.updatedAt,
     age_days:                 daysSince(node.createdAt),
-    idle_days:                daysSince(node.updatedAt),
+    // Since WE replied. It used to be `updatedAt`, which moves when anybody adds a label or
+    // assigns the issue - so an issue with no conversation at all could look active, and the
+    // comment above the Jira version said a field edit is not a reply while this one counted
+    // exactly that. Falls back to the issue's own stamps when we have never replied.
+    idle_days:                daysSince(lastOurs?.createdAt || node.createdAt),
+    // Since the reporter or any outside voice last said anything. Nothing we do resets it.
+    reporter_silent_days:     daysSince(lastTheirs?.createdAt || node.createdAt),
     comments_count:           node.comments?.totalCount || 0,
     last_comment_association: lastComment?.authorAssociation || null,
     last_comment_author:      lastComment?.author?.login || null,

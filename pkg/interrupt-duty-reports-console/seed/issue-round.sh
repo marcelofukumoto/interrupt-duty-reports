@@ -125,12 +125,17 @@ for (const [n, it] of items.entries()) {
   // First look gets everything. Every look after it gets the delta and nothing else: the agent
   // is the one carrying the history, which is the whole reason it exists.
   const payload = seen ? {
-    ref:          it.ref,
-    status:       i.status || (i.tracked ? "tracked" : undefined),
-    status_was:   seen.status,
-    idle_days:    i.idle_days,
-    new_comments: fresh,
-    nothing_new:  !fresh.length && i.status === seen.status,
+    ref:                  it.ref,
+    status:               i.status || (i.tracked ? "tracked" : undefined),
+    status_was:           seen.status,
+    // Two clocks, deliberately. The first is how long since WE replied, which is what the
+    // nudge rule measures; the second is how long the reporter has been quiet, which nothing
+    // we do resets. They come apart exactly when we have been chasing somebody who is not
+    // answering - which is when it matters most.
+    idle_days:            i.idle_days,
+    reporter_silent_days: i.reporter_silent_days,
+    new_comments:         fresh,
+    nothing_new:          !fresh.length && i.status === seen.status,
   } : i;
 
   const lines = [
@@ -196,6 +201,8 @@ function reportItem(it, said) {
       class:         it.cls,
       priority:      i.priority || null,
       age_days:      i.age_days ?? null,
+      idle_days:     i.idle_days ?? null,
+      reporter_silent_days: i.reporter_silent_days ?? null,
       assignee:      i.assignee || null,
       github_issue:  i.github_issue || null,
       last_activity: said.last_activity || null,
@@ -210,6 +217,7 @@ function reportItem(it, said) {
     title:      i.title,
     age_days:   i.age_days ?? null,
     idle_days:  i.idle_days ?? null,
+    reporter_silent_days: i.reporter_silent_days ?? null,
     ...judgement,
   };
 

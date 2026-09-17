@@ -104,6 +104,20 @@ right thing to do. So: before you hand back anything you wrote previously, check
 the budget above and shorten it if it is over. A remembered answer is not exempt from a rule
 that arrived after it.
 
+## Two clocks, and the difference between them
+
+- `idle_days` — how long since **we** replied. This is what the nudge rule measures.
+- `reporter_silent_days` — how long since the **reporter** last said anything. Nothing we do
+  resets it.
+
+They agree while a conversation is going and come apart when we are chasing somebody who has
+stopped answering. That gap is worth saying out loud: "we nudged today, but the reporter has
+not spoken in 52 days" is a far more useful sentence than either number alone, and it is the
+case where a ticket most needs a decision — keep chasing, or close as no-response.
+
+This used to be one number measured from the last comment by anybody, so our own nudge reset
+it and a long-silent reporter looked freshly attended to. If you see the two far apart, say so.
+
 ## The next step
 
 `next_step.verb` is exactly one of: `TRIAGE`, `NEEDS GH ISSUE`, `TRACK ISSUE`, `TRACK PR`,
