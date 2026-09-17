@@ -120,9 +120,19 @@ function parseMeta(cm: any): ReportMeta | null {
  * ordering right up until somebody regenerates yesterday's.
  */
 export async function listReports(): Promise<ReportMeta[]> {
-  const selector = encodeURIComponent(`${ LABEL_PART }=summary`);
-  const list = await steve(`/configmaps?labelSelector=${ selector }`).catch(() => null);
-  const items: any[] = list?.data || [];
+  // STEVE IGNORES `labelSelector`. Not rejects - ignores: the request answers 200 with every
+  // ConfigMap in every namespace of the cluster, and a caller that trusts the parameter is
+  // reading other people's objects believing they matched. The sibling console shipped that
+  // and put one board's pull request on another board's row; here it was hidden only because
+  // anything without a readable meta.json is dropped, which is luck rather than a filter.
+  //
+  // So: ask for the collection by namespace, which is a path segment Steve does honour, and
+  // check the label here on what actually came back.
+  const list = await steve(`/configmaps/${ NAMESPACE }`).catch(() => null);
+  const items: any[] = (list?.data || []).filter((cm: any) => (
+    cm?.metadata?.namespace === NAMESPACE &&
+    (cm?.metadata?.labels || {})[LABEL_PART] === 'summary'
+  ));
 
   return items
     .map(parseMeta)
