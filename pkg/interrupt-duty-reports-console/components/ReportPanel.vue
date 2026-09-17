@@ -20,8 +20,8 @@ import Drawer from '@shell/components/Drawer/Chrome.vue';
 import RcButton from '@components/RcButton/RcButton.vue';
 import ItemCard from './ItemCard.vue';
 import CopyButton from './CopyButton.vue';
-import AgentTerminal from './AgentTerminal.vue';
-import { issueDir, issueSession, issueTerminalCommand } from '../lib/issue-agents';
+import { issueDir, tellIssueAgent } from '../lib/issue-agents';
+import type { PodRef } from '../lib/exec';
 import { whenAgentsReady } from '../lib/agents';
 import { getReport } from '../lib/store';
 import { computeDelta, itemRef } from '../lib/delta';
@@ -286,20 +286,24 @@ function questionChips(item: QuestionItem) {
  * nobody pressed.
  */
 const openChat = ref<string | null>(null);
-const chatCommand = ref<string[] | null>(null);
+const note = ref('');
+const sending = ref(false);
+const reply = ref('');
 const chatError = ref('');
+const chatTarget = ref<PodRef | null>(null);
 
 async function toggleChat(ref_: string) {
   if (openChat.value === ref_) {
     openChat.value = null;
-    chatCommand.value = null;
 
     return;
   }
 
   openChat.value = ref_;
-  chatCommand.value = null;
+  note.value = '';
+  reply.value = '';
   chatError.value = '';
+  chatTarget.value = null;
 
   try {
     const api = await whenAgentsReady(15000);
@@ -312,19 +316,42 @@ async function toggleChat(ref_: string) {
     }
 
     const target = { pod, namespace: api.agent.namespace, container: api.agent.container };
-    const [dir, session] = await Promise.all([issueDir(target, ref_), issueSession(target, ref_)]);
 
-    if (!dir) {
+    if (!await issueDir(target, ref_)) {
       chatError.value = 'This item has no agent yet - it gets one the first time a report asks about it.';
 
       return;
     }
 
-    // No session means it has a directory but has never answered. Opening it fresh is right:
-    // the conversation this starts is the one the next round will resume.
-    chatCommand.value = issueTerminalCommand(dir, session);
+    chatTarget.value = target;
   } catch (e: any) {
     chatError.value = e?.message || String(e);
+  }
+}
+
+/**
+ * Send the note, show what came back.
+ *
+ * One turn rather than a live terminal: a correction is something you write, read back and
+ * then send, and it lands as one clean entry in the conversation the next report resumes. The
+ * Dev extension's code review works the same way and for the same reason.
+ */
+async function sendNote(ref_: string) {
+  if (!note.value.trim() || sending.value || !chatTarget.value) {
+    return;
+  }
+
+  sending.value = true;
+  chatError.value = '';
+  reply.value = '';
+
+  try {
+    reply.value = await tellIssueAgent(chatTarget.value, ref_, note.value);
+    note.value = '';
+  } catch (e: any) {
+    chatError.value = e?.message || String(e);
+  } finally {
+    sending.value = false;
   }
 }
 
@@ -561,7 +588,31 @@ const asText = computed(() => {
                 <Banner v-if="chatError" color="warning">
                   {{ chatError }}
                 </Banner>
-                <AgentTerminal v-else-if="chatCommand" :command="chatCommand" class="panel__chat-pane" />
+
+                <template v-else-if="chatTarget">
+                  <label class="panel__chat-label">
+                    Tell this item's agent something. It remembers the item, and this becomes
+                    standing guidance it carries into future reports.
+                  </label>
+                  <textarea
+                    v-model="note"
+                    class="panel__chat-input"
+                    rows="3"
+                    :disabled="sending"
+                    placeholder="e.g. this is a backend issue, stop recommending TRIAGE on it"
+                  />
+                  <div class="panel__chat-actions">
+                    <RcButton variant="primary" size="small" :disabled="!note.trim() || sending" @click="sendNote(itemRef(item))">
+                      <span>{{ sending ? 'Asking its agent…' : 'Send to its agent' }}</span>
+                    </RcButton>
+                    <span class="panel__chat-note">It replies here, and takes this into account from now on.</span>
+                  </div>
+
+                  <p v-if="reply" class="panel__chat-reply">
+                    {{ reply }}
+                  </p>
+                </template>
+
                 <div v-else class="panel__chat-waiting">
                   <i class="icon icon-spinner icon-spin" />
                   <span>Finding this item's agent…</span>
@@ -631,11 +682,39 @@ const asText = computed(() => {
   overflow: hidden;
 }
 
-.panel__chat-pane {
+.panel__chat-label {
+  display: block;
+  padding: 12px 12px 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.panel__chat-input {
+  display: block;
+  width: calc(100% - 24px);
+  margin: 0 12px;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.panel__chat-actions {
   display: flex;
-  flex-direction: column;
-  min-height: 0;
-  height: 420px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.panel__chat-note {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.panel__chat-reply {
+  margin: 0;
+  padding: 10px 12px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+  white-space: pre-wrap;
 }
 
 .panel__chat-waiting {

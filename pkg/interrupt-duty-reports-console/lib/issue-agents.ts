@@ -5,7 +5,7 @@
 // item's own card, and says something the next report will then take into account - because a
 // chat and a round resume the SAME conversation, so what is said here is simply there
 // tomorrow. That is the point of it rather than a side effect.
-import { podExec } from './exec';
+import { podExec, podWriteFile } from './exec';
 import type { PodRef } from './exec';
 import { writeSeed } from './run';
 
@@ -51,6 +51,54 @@ export function issueDir(target: PodRef, key: string): Promise<string> {
 /** True while somebody has this agent's chat open, so the round should leave it alone. */
 export async function issueBusy(target: PodRef, key: string): Promise<boolean> {
   return (await say(target, ['busy', key]).catch(() => '')) === 'busy';
+}
+
+/**
+ * Say something to one item's agent, and get its answer.
+ *
+ * Through the same `ask` the nightly round uses, deliberately: the note lands in the one
+ * conversation the next round resumes, so what is said here is simply there tomorrow. There is
+ * no separate channel to keep in sync because there is no separate channel.
+ *
+ * FRAMED, not passed through raw. This is the lesson from the Dev extension's code review,
+ * which wraps every note it sends in what to do with it - "address each point, make the change
+ * if it asks for one, say what you did". A remembered sentence is not the same as an
+ * instruction honoured: having the words in context makes acting on them likely, and saying
+ * they outrank the agent's own earlier reasoning makes it the rule.
+ */
+export async function tellIssueAgent(target: PodRef, key: string, note: string): Promise<string> {
+  await ensureSeed(target);
+
+  const file = `/tmp/idr-note-${ Date.now() }.txt`;
+  const framed = [
+    `A message about ${ key } from the person reading today's interrupt-duty report.`,
+    '',
+    note.trim(),
+    '',
+    'What to do with it: take it as standing guidance on this item from here on. It outranks',
+    'your own earlier reasoning - if it contradicts something you concluded before, they win,',
+    'and you should carry it into every future report on this item rather than only answering',
+    'now. If it is a question, answer it. Then say plainly, in one or two sentences, what you',
+    'will do differently. Do not write JSON for this one - just reply.',
+  ].join('\n');
+
+  await podWriteFile(target, file, framed, { mode: '600', owner: 'node' });
+
+  const result = await podExec(
+    target,
+    ['/bin/sh', `${ ROOT }/issue-agent.sh`, 'ask', key, file],
+    { timeoutMs: 600000 },
+  );
+
+  await podExec(target, ['/bin/sh', '-c', `rm -f ${ file }`], { timeoutMs: 10000 }).catch(() => undefined);
+
+  const said = (result.stdout || '').trim();
+
+  if (!said) {
+    throw new Error((result.stderr || '').trim() || 'The agent did not answer.');
+  }
+
+  return said;
 }
 
 /**
