@@ -35,7 +35,7 @@ mkdir -p "$WORK"
 # One file per item: its data, its computed class, and the shape of the answer wanted back.
 node -e '
 const fs = require("fs");
-const [dataPath, workDir] = process.argv.slice(1);
+const [dataPath, workDir, brief] = process.argv.slice(1);
 const d = JSON.parse(fs.readFileSync(dataPath, "utf8"));
 
 // The rule table, as code. Order matters: first match wins.
@@ -135,38 +135,39 @@ for (const [n, it] of items.entries()) {
 
   const lines = [
     `You are the standing agent for ${ it.kind === "jira" ? "Jira ticket" : "GitHub issue" } ${ it.ref }.`,
-    `Today is ${ d.report_date }. You may have looked at this item on earlier days; if so, say what CHANGED.`,
+    `Today is ${ d.report_date }.`,
+    "",
+    `Read ${ brief } IN FULL before you answer. It is your standing brief and it is authoritative.`,
     "",
     seen
-      ? "What is NEW since you last looked (you already know the rest - do not ask for it):"
-      : "Today\u2019s data for your item (this is your first look at it):",
+      ? "What is NEW since you last looked (you already know the rest - it is not sent twice):"
+      : "Your item (first look - everything you get today):",
     "```json",
     JSON.stringify(payload, null, 1),
     "```",
     "",
-    `Its class today is **${ it.cls }** (rule: ${ it.rule }). That is computed from the data, not your`,
-    "decision - use it. If you believe it is wrong, say so in class_dispute; do not use a different one.",
+    `Class today: **${ it.cls }** (rule: ${ it.rule }). Computed, not your decision - see the brief.`,
     "",
-    "Reply with ONE json object and nothing else - no fence, no commentary:",
+    "Reply with ONE json object and nothing else - no fence, no commentary. Only these keys:",
     "",
     JSON.stringify({
-      ref:            it.ref,
-      headline:       "one short line: the state of this item today",
-      changed:        "what changed since you last looked, or \"first look\" if this is the first",
-      why:            "one or two sentences: why this matters today",
-      recommendation: "the concrete next move we owe, in one line",
-      draft:          "optional: a reply you would send, or empty",
-      class_dispute:  "empty, OR one line if you believe the computed class is wrong and why",
+      changed:           "one line: what changed since you last looked, or \"first look\"",
+      last_activity:     { who: "reporter | us | nobody", days_ago: 0, context: "one short sentence" },
+      next_step:         { verb: "one of the verbs in the brief", explanation: "one to three plain sentences" },
+      suggested_comment: "copy-pasteable draft, plain text - or null for a GitHub issue that needs none",
+      quick_action:      null,
+      class_dispute:     "",
     }, null, 1),
     "",
-    "Keep it factual and short. Do not invent activity that is not in the data.",
+    "Do not repeat the item\u2019s facts back - its key, url, title, dates and links are already",
+    "known and will be filled in around your answer. Judgement is what is wanted from you.",
   ];
 
   fs.writeFileSync(`${ workDir }/${ String(n).padStart(3, "0") }.prompt`, lines.join("\n"));
 }
 
 process.stderr.write(`issue-round: ${ items.length } items\n`);
-' "$DIR/data.json" "$WORK"
+' "$DIR/data.json" "$WORK" "$ROOT/issue-brief.md"
 
 # Ask each one, in turn. A failure is recorded against that item rather than ending the round:
 # one agent that times out should cost one contribution, not the report.
@@ -176,6 +177,51 @@ const { execFileSync } = require("child_process");
 const [workDir, agent] = process.argv.slice(1);
 const items = JSON.parse(fs.readFileSync(`${ workDir }/items.json`, "utf8"));
 const out = {};
+
+/** One finished report item: the data\u2019s facts, wrapped around the agent\u2019s words. */
+function reportItem(it, said) {
+  const i = it.item;
+  const judgement = {
+    class_dispute:     said.class_dispute || "",
+    changed:           said.changed || "",
+    next_step:         said.next_step || null,
+    suggested_comment: said.suggested_comment ?? null,
+  };
+
+  if (it.kind === "jira") {
+    return {
+      key:           i.key,
+      url:           i.url,
+      title:         i.summary,
+      class:         it.cls,
+      priority:      i.priority || null,
+      age_days:      i.age_days ?? null,
+      assignee:      i.assignee || null,
+      github_issue:  i.github_issue || null,
+      last_activity: said.last_activity || null,
+      quick_action:  said.quick_action || null,
+      ...judgement,
+    };
+  }
+
+  const base = {
+    number:     i.number,
+    url:        i.url,
+    title:      i.title,
+    age_days:   i.age_days ?? null,
+    idle_days:  i.idle_days ?? null,
+    ...judgement,
+  };
+
+  // A question has no class and no kind line; an issue has both.
+  return it.group === "questions" ? base : {
+    ...base,
+    class:          it.cls,
+    comments_count: i.comments_count ?? null,
+    kind:           (i.labels || []).join(", ") || null,
+    linked_prs:     i.linked_prs || [],
+  };
+}
 
 for (const [n, it] of items.entries()) {
   const prompt = `${ workDir }/${ String(n).padStart(3, "0") }.prompt`;
@@ -187,8 +233,14 @@ for (const [n, it] of items.entries()) {
     const answer = execFileSync(argv[0], argv.slice(1), { encoding: "utf8", timeout: 600000 });
     const match = answer.match(/\{[\s\S]*\}/);
 
+    const said = match ? JSON.parse(match[0]) : null;
+
+    // The report item: facts from the data, judgement from the agent. The agent is never asked
+    // to type back a key, a url or a date it was handed - a transcription error in a fact is
+    // both likelier and worse than one in prose, and the data already has them right.
     out[it.ref] = {
-      ...it, ok: true, contribution: match ? JSON.parse(match[0]) : null, raw: match ? undefined : answer.slice(0, 500),
+      ...it, ok: true, contribution: said, raw: match ? undefined : answer.slice(0, 500), item: undefined,
+      report: said ? reportItem(it, said) : null,
     };
 
     // Only after it answered. A turn that failed did not see today, so tomorrow should still

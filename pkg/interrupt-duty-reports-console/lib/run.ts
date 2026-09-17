@@ -77,7 +77,7 @@ function openingPrompt(runDir: string, id: string, date: string): string {
     '',
     `Your run directory is ${ runDir }. Work only in there.`,
     '',
-    'Do these four steps in order, without stopping to ask anything:',
+    'Do these five steps in order, without stopping to ask anything:',
     '',
     `1. Gather the data:  sh ${ ROOT }/run.sh ${ runDir }`,
     `   It writes ${ runDir }/data.json. It already has the credentials it needs - do not look`,
@@ -87,11 +87,17 @@ function openingPrompt(runDir: string, id: string, date: string): string {
     '   authoritative: the classes, the readiness gate, the next-step verbs, the suggested',
     '   comments and the exact JSON shape all come from it.',
     '',
-    `3. Read ${ runDir }/data.json and write ${ runDir }/report.json following that spec.`,
+    `3. Ask every item's agent:  sh ${ ROOT }/issue-round.sh ${ runDir }`,
+    '   Each item has a standing agent that has followed it across previous reports. This',
+    '   visits them one at a time and writes contributions.json. It takes a few minutes per',
+    '   item - let it finish, and do not start writing the report before it has.',
+    '',
+    `4. Read ${ runDir }/contributions.json and assemble ${ runDir }/report.json following that`,
+    '   spec. Place each agent\'s `report` object as it is; what you decide is the Top 3.',
     '   report.json must be a single JSON document and nothing else: no markdown fence, no',
     '   commentary around it. Every group array must be present even when it is empty.',
     '',
-    `4. Publish it:  sh ${ ROOT }/publish.sh ${ runDir } ${ id } done`,
+    `5. Publish it:  sh ${ ROOT }/publish.sh ${ runDir } ${ id } done`,
     '',
     'If a step fails and you cannot recover, do not leave the run hanging - record the failure:',
     `   sh ${ ROOT }/publish.sh ${ runDir } ${ id } fail "one line saying what went wrong"`,
@@ -119,14 +125,24 @@ function agentTarget(pod: string): PodRef {
  * the same bundle carries. Writing three small files is cheaper than the bug.
  */
 async function writeSeed(target: PodRef): Promise<void> {
-  for (const name of ['gather.mjs', 'run.sh', 'publish.sh', 'daily-report.prompt.md']) {
+  const files = [
+    'gather.mjs', 'run.sh', 'publish.sh', 'daily-report.prompt.md',
+    // The round of per-issue agents, and the brief each of them reads.
+    'issue-round.sh', 'issue-agent.sh', 'issue-brief.md',
+  ];
+
+  for (const name of files) {
     const content = SEED_FILES[name];
 
     if (!content) {
       throw new Error(`This build is missing its ${ name } - run "yarn gen-seed" and rebuild.`);
     }
 
-    await podWriteFile(target, `${ ROOT }/${ name }`, content, { mode: '644', owner: POD_USER });
+    // The scripts are RUN, the prompts are read. A script written 644 is "Permission denied"
+    // for anything that invokes it directly instead of through `sh`.
+    await podWriteFile(target, `${ ROOT }/${ name }`, content, {
+      mode: name.endsWith('.sh') ? '755' : '644', owner: POD_USER,
+    });
   }
 
   // The directory itself, so the pane (which is not root) can make its own run directories in it.
