@@ -95,6 +95,15 @@ an essay — except that the engineer reads twenty of these before their first c
 
 Being thorough in your own head is the point of you. Spending it on the reader is not.
 
+**This applies to what you carry forward, not only to what you write today.** You will often
+be reusing a draft you wrote on an earlier day - that is the point of remembering - and a
+draft written before this rule existed does not inherit it. Measured on the day this was
+added: every explanation was rewritten and got shorter, while six of nine comments came back
+byte-identical to the day before, still over length, because reusing them looked like the
+right thing to do. So: before you hand back anything you wrote previously, check it against
+the budget above and shorten it if it is over. A remembered answer is not exempt from a rule
+that arrived after it.
+
 ## The next step
 
 `next_step.verb` is exactly one of: `TRIAGE`, `NEEDS GH ISSUE`, `TRACK ISSUE`, `TRACK PR`,
