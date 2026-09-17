@@ -238,10 +238,50 @@ for (const [n, it] of items.entries()) {
   process.stderr.write(`issue-round: ${ it.ref } (${ n + 1 }/${ items.length }) ${ it.cls }\n`);
 
   try {
-    const answer = execFileSync(argv[0], argv.slice(1), { encoding: "utf8", timeout: 600000 });
-    const match = answer.match(/\{[\s\S]*\}/);
+    let answer = execFileSync(argv[0], argv.slice(1), { encoding: "utf8", timeout: 600000 });
+    let match = answer.match(/\{[\s\S]*\}/);
+    let said = match ? JSON.parse(match[0]) : null;
 
-    const said = match ? JSON.parse(match[0]) : null;
+    // One re-ask when the draft is over length, with the number in it.
+    //
+    // The brief has asked for a short comment twice now and been ignored twice - not out of
+    // defiance, but because an agent reusing the previous draft has no way to know it is over
+    // length, and asking a model to count its own characters is asking the wrong thing.
+    // Measured across three runs: explanations, which are written fresh each time, came down
+    // from 604 to 490; comments, which are carried forward, stayed at 1100 with eight of nine
+    // byte-identical. A number it cannot argue with is the thing that was missing.
+    //
+    // Once, not in a loop: a second failure is worth reporting, not worth paying for again.
+    const LIMIT = 700;
+    const draft = said?.suggested_comment;
+
+    if (typeof draft === "string" && draft.length > LIMIT) {
+      const again = `${ workDir }/${ String(n).padStart(3, "0") }.retry`;
+
+      fs.writeFileSync(again, [
+        `Your suggested_comment for ${ it.ref } is ${ draft.length } characters. The limit is ${ LIMIT }.`,
+        "",
+        "Send the same JSON object again with the same content and the same meaning, but with",
+        "suggested_comment cut to something a person would actually paste into a ticket. Keep",
+        "the ask and the specifics; drop the preamble, the restatement and the second example.",
+        "Everything else in the object stays exactly as it was.",
+      ].join("\n"));
+
+      process.stderr.write(`issue-round: ${ it.ref } comment ${ draft.length } chars, asking once for shorter\n`);
+
+      try {
+        answer = execFileSync(argv[0], argv.slice(1, -1).concat([again]), { encoding: "utf8", timeout: 600000 });
+        match = answer.match(/\{[\s\S]*\}/);
+
+        const shorter = match ? JSON.parse(match[0]) : null;
+
+        if (typeof shorter?.suggested_comment === "string" && shorter.suggested_comment.length < draft.length) {
+          said = shorter;
+        }
+      } catch {
+        // Keep the long one. Over length beats absent.
+      }
+    }
 
     // The report item: facts from the data, judgement from the agent. The agent is never asked
     // to type back a key, a url or a date it was handed - a transcription error in a fact is
