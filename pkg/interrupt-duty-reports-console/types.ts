@@ -25,6 +25,10 @@ export interface QuickAction {
 }
 
 export interface JiraItem {
+  /** What this item's own agent says changed since it last looked. */
+  changed?: string | null;
+  /** Its agent's disagreement with the computed class, carried through rather than resolved. */
+  class_dispute?: string | null;
   /** Days since WE replied - what the nudge rule measures. */
   idle_days?: number | null;
   /** Days since the reporter last spoke. Nothing we do resets it. */
@@ -44,6 +48,10 @@ export interface JiraItem {
 }
 
 export interface GitHubItem {
+  /** What this item's own agent says changed since it last looked. */
+  changed?: string | null;
+  /** Its agent's disagreement with the computed class, carried through rather than resolved. */
+  class_dispute?: string | null;
   /** Days since the reporter last spoke. Nothing we do resets it. */
   reporter_silent_days?: number | null;
   number: number;
@@ -60,6 +68,10 @@ export interface GitHubItem {
 }
 
 export interface QuestionItem {
+  /** What this item's own agent says changed since it last looked. */
+  changed?: string | null;
+  /** Its agent's disagreement with the computed class, carried through rather than resolved. */
+  class_dispute?: string | null;
   /** Days since the reporter last spoke. Nothing we do resets it. */
   reporter_silent_days?: number | null;
   number: number;

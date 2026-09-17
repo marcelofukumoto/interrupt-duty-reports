@@ -25,7 +25,17 @@ const props = defineProps<{
   /** On this report and not on the one before it - a new obligation rather than a standing one. */
   isNew?: boolean;
   newSince?: string;
+  /** What this item's own agent said changed since it last looked. */
+  changed?: string | null;
+  /** Its agent believes the computed class is wrong, and why. Carried, never resolved here. */
+  classDispute?: string | null;
+  /** Whether a chat can be opened - false before the agent has ever been asked. */
+  hasAgent?: boolean;
+  /** Whether the chat is showing right now. */
+  chatOpen?: boolean;
 }>();
+
+const emit = defineEmits<{ (e: 'chat'): void }>();
 
 const style = computed(() => classStyle(props.itemClass));
 const weight = computed(() => verbWeight(props.nextStep?.verb));
@@ -114,6 +124,25 @@ const activity = computed(() => {
       {{ quickAction.label }}
     </a>
 
+    <!--
+      What its agent noticed since last time, which is the one thing no snapshot of today can
+      tell you. Above the recommendation because it is usually why the recommendation changed.
+    -->
+    <p v-if="changed" class="item__changed">
+      <i class="icon icon-history" />
+      <span>{{ changed }}</span>
+    </p>
+
+    <!--
+      The agent disagrees with its computed class. Shown, never acted on: the class stays as
+      computed and a person decides, which is the whole reason the dispute is carried instead
+      of resolved.
+    -->
+    <p v-if="classDispute" class="item__dispute">
+      <i class="icon icon-warning" />
+      <span>{{ classDispute }}</span>
+    </p>
+
     <section v-if="suggestedComment" class="item__comment">
       <header class="item__comment-head">
         <span>Suggested comment</span>
@@ -123,10 +152,63 @@ const activity = computed(() => {
         {{ suggestedComment }}
       </p>
     </section>
+
+    <!--
+      Talking to the agent that wrote all of the above. It has followed this item across every
+      report it appeared in, and the conversation you have here is the one the next report
+      resumes - so a correction made now is simply there tomorrow, without anybody carrying it.
+    -->
+    <footer v-if="hasAgent" class="item__agent">
+      <button type="button" class="item__agent-open" @click="emit('chat')">
+        <i :class="['icon', chatOpen ? 'icon-chevron-up' : 'icon-chat']" />
+        <span>{{ chatOpen ? 'Close the chat' : 'Ask its agent' }}</span>
+      </button>
+      <span class="item__agent-note">
+        It remembers this item; what you say here reaches the next report.
+      </span>
+    </footer>
+
+    <slot name="chat" />
   </article>
 </template>
 
 <style lang="scss" scoped>
+.item__changed,
+.item__dispute {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.item__dispute { color: var(--warning); }
+
+.item__agent {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.item__agent-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--link);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.item__agent-note {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .item {
   position: relative;
   padding: 14px 16px 14px 20px;

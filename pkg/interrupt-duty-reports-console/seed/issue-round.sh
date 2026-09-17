@@ -307,7 +307,17 @@ for (const [n, it] of items.entries()) {
       }));
     } catch { /* the agent answered; failing to note it is not worth losing that */ }
   } catch (e) {
-    out[it.ref] = { ...it, ok: false, error: String(e.message || e).slice(0, 300) };
+    // Exit 3 is the agent standing down because somebody has its chat open. That is not a
+    // failure, it is the right outcome: a person mid-conversation outranks the nightly round,
+    // and whatever they say will be in the transcript the next round resumes anyway.
+    const busy = e?.status === 3;
+
+    out[it.ref] = {
+      ...it,
+      ok:    false,
+      busy,
+      error: busy ? "its chat was open, so the round left it alone" : String(e.message || e).slice(0, 300),
+    };
     process.stderr.write(`issue-round: ${ it.ref } FAILED - ${ out[it.ref].error }\n`);
   }
 }

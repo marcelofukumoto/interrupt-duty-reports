@@ -20,6 +20,9 @@ import Drawer from '@shell/components/Drawer/Chrome.vue';
 import RcButton from '@components/RcButton/RcButton.vue';
 import ItemCard from './ItemCard.vue';
 import CopyButton from './CopyButton.vue';
+import AgentTerminal from './AgentTerminal.vue';
+import { issueDir, issueSession, issueTerminalCommand } from '../lib/issue-agents';
+import { whenAgentsReady } from '../lib/agents';
 import { getReport } from '../lib/store';
 import { computeDelta, itemRef } from '../lib/delta';
 import type { ReportDelta } from '../lib/delta';
@@ -275,6 +278,56 @@ function questionChips(item: QuestionItem) {
   ];
 }
 
+/**
+ * The chat with one item's standing agent, opened from its own card.
+ *
+ * Resolved when it is asked for rather than for every item on load: finding an agent is an
+ * exec into the pod, and a report with thirty items would make thirty of them to draw buttons
+ * nobody pressed.
+ */
+const openChat = ref<string | null>(null);
+const chatCommand = ref<string[] | null>(null);
+const chatError = ref('');
+
+async function toggleChat(ref_: string) {
+  if (openChat.value === ref_) {
+    openChat.value = null;
+    chatCommand.value = null;
+
+    return;
+  }
+
+  openChat.value = ref_;
+  chatCommand.value = null;
+  chatError.value = '';
+
+  try {
+    const api = await whenAgentsReady(15000);
+    const pod = api && await api.agent.pod();
+
+    if (!api || !pod) {
+      chatError.value = 'The agent pod is not running, so there is nothing to talk to.';
+
+      return;
+    }
+
+    const target = { pod, namespace: api.agent.namespace, container: api.agent.container };
+    const [dir, session] = await Promise.all([issueDir(target, ref_), issueSession(target, ref_)]);
+
+    if (!dir) {
+      chatError.value = 'This item has no agent yet - it gets one the first time a report asks about it.';
+
+      return;
+    }
+
+    // No session means it has a directory but has never answered. Opening it fresh is right:
+    // the conversation this starts is the one the next round will resume.
+    chatCommand.value = issueTerminalCommand(dir, session);
+  } catch (e: any) {
+    chatError.value = e?.message || String(e);
+  }
+}
+
 function chipsFor(section: { kind: string }, item: AnyItem) {
   if (section.kind === 'jira') {
     return jiraChips(item as JiraItem);
@@ -497,7 +550,25 @@ const asText = computed(() => {
             :quick-action="section.kind === 'jira' ? (item as JiraItem).quick_action : null"
             :is-new="isFresh(item)"
             :new-since="delta?.previousDate"
-          />
+            :changed="(item as JiraItem).changed"
+            :class-dispute="(item as JiraItem).class_dispute"
+            :has-agent="true"
+            :chat-open="openChat === itemRef(item)"
+            @chat="toggleChat(itemRef(item))"
+          >
+            <template #chat>
+              <div v-if="openChat === itemRef(item)" class="panel__chat">
+                <Banner v-if="chatError" color="warning">
+                  {{ chatError }}
+                </Banner>
+                <AgentTerminal v-else-if="chatCommand" :command="chatCommand" class="panel__chat-pane" />
+                <div v-else class="panel__chat-waiting">
+                  <i class="icon icon-spinner icon-spin" />
+                  <span>Finding this item's agent…</span>
+                </div>
+              </div>
+            </template>
+          </ItemCard>
         </section>
       </div>
       </template>
@@ -551,6 +622,31 @@ const asText = computed(() => {
 </template>
 
 <style lang="scss" scoped>
+// The pane sizes itself to what contains it, so this has to give it a height to fill rather
+// than letting it grow the page.
+.panel__chat {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.panel__chat-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 420px;
+}
+
+.panel__chat-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .panel {
   padding: 0;
 

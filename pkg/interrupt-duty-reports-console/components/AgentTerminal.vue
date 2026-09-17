@@ -21,9 +21,18 @@ import { whenAgentsReady } from '../lib/agents';
 import type { AgentsApi } from '../lib/agents';
 
 const props = withDefaults(defineProps<{
-  session: string;
+  /** One of the agents panel's own conversations. */
+  session?: string;
   mode?: 'claude' | 'shell';
-}>(), { mode: 'claude' });
+  /**
+   * A raw argv instead, for something that is not one of those conversations.
+   *
+   * An issue's standing agent is a plain claude session in a directory of its own - not a pane
+   * the agents panel owns - so `agent.command(id)` cannot address it. The terminal component
+   * takes a command as well as a session, and this is that door.
+   */
+  command?: string[] | null;
+}>(), { session: '', mode: 'claude', command: null });
 
 const emit = defineEmits<{ (e: 'state', value: string): void }>();
 
@@ -32,7 +41,13 @@ const api = ref<AgentsApi | null>(null);
 const waited = ref(false);
 
 const terminal = computed(() => api.value?.terminal?.component || null);
-const argv = computed(() => (api.value && props.session ? api.value.agent.command(props.session, props.mode) : null));
+const argv = computed(() => {
+  if (props.command?.length) {
+    return props.command;
+  }
+
+  return api.value && props.session ? api.value.agent.command(props.session, props.mode) : null;
+});
 const missing = computed(() => waited.value && !terminal.value);
 
 onMounted(async() => {
@@ -58,6 +73,9 @@ onMounted(async() => {
       :session="session"
       :command="argv"
       :mode="mode"
+      :namespace="api?.agent?.namespace"
+      :container="api?.agent?.container"
+      :find-pod="api?.agent?.pod"
       class="agent-terminal__pane"
       @state="emit('state', $event)"
     />

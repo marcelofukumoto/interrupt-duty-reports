@@ -12,6 +12,8 @@
 #
 #   issue-agent.sh ask   <key> <prompt-file>   # find or create, resume, print the answer
 #   issue-agent.sh id    <key>                 # the claude session uuid, or nothing
+#   issue-agent.sh dir   <key>                 # where it lives
+#   issue-agent.sh busy  <key>                 # "busy" when somebody has its chat open
 #   issue-agent.sh end   <key>                 # the ticket is closed; forget it
 #   issue-agent.sh list                        # every issue with an agent
 #
@@ -54,6 +56,26 @@ case "$cmd" in
     [ -s "$d/session.id" ] && cat "$d/session.id" || true
     ;;
 
+  dir)
+    dir_for "${2:?needs an issue key}"
+    ;;
+
+  busy)
+    # Is somebody talking to this agent right now?
+    #
+    # One transcript, one writer. The console can open a chat on an issue and the nightly round
+    # resumes the same conversation, and two claudes appending to one JSONL is how a
+    # conversation gets corrupted rather than merged. A chat is a person waiting, so the round
+    # is the one that stands down.
+    d=$(dir_for "${2:?needs an issue key}")
+
+    for pid in $(pgrep -f "claude" 2>/dev/null); do
+      [ "$(readlink -f "/proc/$pid/cwd" 2>/dev/null)" = "$(readlink -f "$d" 2>/dev/null)" ] && { echo busy; exit 0; }
+    done
+
+    echo free
+    ;;
+
   list)
     for d in "$ROOT"/*/; do
       [ -d "$d" ] || continue
@@ -78,6 +100,15 @@ case "$cmd" in
     [ -f "$FILE" ] || { echo "issue-agent: no such prompt file: $FILE" >&2; exit 2; }
 
     d=$(dir_for "$KEY")
+
+    # Stand down if a person is mid-conversation with this agent - see `busy` above.
+    for pid in $(pgrep -f "claude" 2>/dev/null); do
+      if [ "$(readlink -f "/proc/$pid/cwd" 2>/dev/null)" = "$(readlink -f "$d" 2>/dev/null)" ]; then
+        echo "issue-agent: $KEY has its chat open; leaving it to whoever is talking to it" >&2
+        exit 3
+      fi
+    done
+
     mkdir -p "$d"
     printf '%s' "$KEY" > "$d/key"
     cd "$d"
