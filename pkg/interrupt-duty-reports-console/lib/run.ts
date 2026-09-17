@@ -124,7 +124,7 @@ function agentTarget(pod: string): PodRef {
  * a run against last month's copy of the gather is a run whose output does not match the spec
  * the same bundle carries. Writing three small files is cheaper than the bug.
  */
-async function writeSeed(target: PodRef): Promise<void> {
+export async function writeSeed(target: PodRef): Promise<void> {
   const files = [
     'gather.mjs', 'run.sh', 'publish.sh', 'daily-report.prompt.md',
     // The round of per-issue agents, and the brief each of them reads.

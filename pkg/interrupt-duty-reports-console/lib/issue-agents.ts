@@ -7,12 +7,32 @@
 // tomorrow. That is the point of it rather than a side effect.
 import { podExec } from './exec';
 import type { PodRef } from './exec';
+import { writeSeed } from './run';
 
 /** Where the seed writes issue-agent.sh, and where the agents keep their directories. */
 const ROOT = '/workspace/.interrupt-duty';
 const CLAUDE = '/workspace/.home/.local/bin/claude';
 
+/**
+ * The scripts this talks to are written into the pod when a REPORT starts, and a chat is not a
+ * report: on a freshly deployed bundle the pod still holds the previous version, so the first
+ * thing a chat asked for came back "unknown command" and the card said the item had no agent
+ * when it had one. A read path cannot depend on a write path having run first.
+ *
+ * Written once per page rather than per question - it is several small files and a chat asks
+ * three things in a row.
+ */
+let seeded: Promise<void> | null = null;
+
+function ensureSeed(target: PodRef): Promise<void> {
+  seeded = seeded || writeSeed(target).catch(() => undefined) as Promise<void>;
+
+  return seeded;
+}
+
 async function say(target: PodRef, args: string[]): Promise<string> {
+  await ensureSeed(target);
+
   const result = await podExec(target, ['/bin/sh', `${ ROOT }/issue-agent.sh`, ...args], { timeoutMs: 20000 });
 
   return (result.stdout || '').trim();
