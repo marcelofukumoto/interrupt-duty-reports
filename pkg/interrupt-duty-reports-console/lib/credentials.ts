@@ -28,7 +28,14 @@
 import { K8S_BASE, rancherFetch } from './rancher';
 
 /** Where this extension keeps its own. The reports live here too. */
-export const CRED_NAMESPACE = 'interrupt-duty-reports-console';
+/**
+ * Settings live in one namespace shared by every console in this family.
+ *
+ * Not beside this extension's own data. It is the same GitHub token whichever board you are
+ * looking at, and a copy per extension meant the same secret pasted twice, expiring at
+ * different times, with two dialogs disagreeing about whether it was set.
+ */
+export const CRED_NAMESPACE = 'ui-internal-tools';
 export const CRED_SECRET = 'settings';
 
 /** The key prefixes. One key per user: `gh_token-<principal>`, `jira_pat-<principal>`. */
@@ -36,30 +43,21 @@ export const GH_TOKEN_KEY = 'gh_token';
 export const JIRA_PAT_KEY = 'jira_pat';
 
 /**
- * A Rancher principal as a Secret key.
+ * Is the person looking at this the `admin` user?
  *
- * `local://user-qncms` becomes `local-user-qncms`. The principal id is what the dashboard
- * actually has - it is on every page, it is stable, and it distinguishes a local user from the
- * same login arriving through GitHub. Secret data keys allow only `[-._a-zA-Z0-9]`, so
- * everything else collapses to a hyphen.
+ * By username, asked of Rancher, rather than by principal id - an id is per installation and
+ * hard-coding one makes an extension that only works where it was written. Norman's `?me=true`
+ * answers for the caller, so there is nothing to pass in: the session asking is the session
+ * described. Failure is NOT admin; a check that cannot be made has not passed.
  */
-export function userSlug(principalId: string): string {
-  return String(principalId || '')
-    .replace(/[^a-zA-Z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 200) || 'unknown';
+export async function isAdminUser(): Promise<boolean> {
+  const me = await rancherFetch(`${ K8S_BASE.replace('/api/v1', '') }/v3/users?me=true`).catch(() => null);
+
+  return (me?.data || []).some((u: any) => u?.username === 'admin');
 }
 
-export function ghKey(principalId: string): string {
-  return `${ GH_TOKEN_KEY }-${ userSlug(principalId) }`;
-}
-
-export function jiraKey(principalId: string): string {
-  return `${ JIRA_PAT_KEY }-${ userSlug(principalId) }`;
-}
-
-const ghAnnotation = (principalId: string) => `interrupt-duty.rancher.io/gh-${ userSlug(principalId) }`;
-const jiraAnnotation = (principalId: string) => `interrupt-duty.rancher.io/jira-${ userSlug(principalId) }`;
+const ghAnnotation = 'interrupt-duty.rancher.io/gh';
+const jiraAnnotation = 'interrupt-duty.rancher.io/jira';
 
 /**
  * Ask for metadata and nothing else.
@@ -101,40 +99,28 @@ function managedDataKeys(metadata: any): string[] {
 }
 
 export interface CredentialStatus {
-  /** Whether THIS user has stored one. Nobody else's presence helps them. */
+  /** Whether a token is stored for the installation. */
   gh: boolean;
   jira: boolean;
-  /** How many other people have stored a pair, which is worth saying on a shared page. */
-  others: number;
-  /** True when the namespace or Secret could not be read at all - a permissions problem, not an absence. */
+  /** True when the namespace or Secret could not be read at all - permissions, not absence. */
   unreadable: boolean;
 }
 
-/** What this user has stored, and nothing about what it is. */
-export async function readCredentialStatus(principalId: string): Promise<CredentialStatus> {
+/** What is stored, and nothing about what it is. */
+export async function readCredentialStatus(): Promise<CredentialStatus> {
   const metadata = await secretMetadata(CRED_NAMESPACE, CRED_SECRET);
 
   if (!metadata) {
-    return {
-      gh: false, jira: false, others: 0, unreadable: false,
-    };
+    return { gh: false, jira: false, unreadable: false };
   }
 
   const keys = managedDataKeys(metadata);
   const annotations = metadata.annotations || {};
   const has = (key: string, annotation: string) => annotations[annotation] === 'set' || keys.includes(key);
-  const gh = has(ghKey(principalId), ghAnnotation(principalId));
-  const everyone = new Set([
-    ...keys.filter((key) => key.startsWith(`${ GH_TOKEN_KEY }-`)),
-    ...Object.keys(annotations)
-      .filter((key) => key.startsWith('interrupt-duty.rancher.io/gh-'))
-      .map((key) => `${ GH_TOKEN_KEY }-${ key.split('/')[1].replace(/^gh-/, '') }`),
-  ]);
 
   return {
-    gh,
-    jira:       has(jiraKey(principalId), jiraAnnotation(principalId)),
-    others:     Math.max(0, everyone.size - (gh ? 1 : 0)),
+    gh:         has(GH_TOKEN_KEY, ghAnnotation),
+    jira:       has(JIRA_PAT_KEY, jiraAnnotation),
     unreadable: false,
   };
 }
@@ -189,18 +175,18 @@ export interface CredentialChanges {
  * A field the form left `undefined` is not in `changes` and is not written, which is what stops
  * opening the dialog and saving from blanking a credential nobody could see.
  */
-export async function saveCredentials(principalId: string, changes: CredentialChanges): Promise<void> {
+export async function saveCredentials(changes: CredentialChanges): Promise<void> {
   const data: Record<string, string | null> = {};
   const annotations: Record<string, string | null> = {};
 
   if (changes.ghToken !== undefined) {
-    data[ghKey(principalId)] = changes.ghToken === '' ? null : encodeSecret(changes.ghToken);
-    annotations[ghAnnotation(principalId)] = changes.ghToken === '' ? null : 'set';
+    data[GH_TOKEN_KEY] = changes.ghToken === '' ? null : encodeSecret(changes.ghToken);
+    annotations[ghAnnotation] = changes.ghToken === '' ? null : 'set';
   }
 
   if (changes.jiraPat !== undefined) {
-    data[jiraKey(principalId)] = changes.jiraPat === '' ? null : encodeSecret(changes.jiraPat);
-    annotations[jiraAnnotation(principalId)] = changes.jiraPat === '' ? null : 'set';
+    data[JIRA_PAT_KEY] = changes.jiraPat === '' ? null : encodeSecret(changes.jiraPat);
+    annotations[jiraAnnotation] = changes.jiraPat === '' ? null : 'set';
   }
 
   if (!Object.keys(data).length) {

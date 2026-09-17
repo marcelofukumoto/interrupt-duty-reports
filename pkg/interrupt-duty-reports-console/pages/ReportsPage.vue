@@ -23,7 +23,7 @@ import ReportRow from '../components/ReportRow.vue';
 import RunProgress from '../components/RunProgress.vue';
 import TrendTile from '../components/TrendTile.vue';
 import { agentsStatus, whenAgentsReady } from '../lib/agents';
-import { credentialsReady, readCredentialStatus } from '../lib/credentials';
+import { credentialsReady, isAdminUser, readCredentialStatus } from '../lib/credentials';
 import type { CredentialStatus } from '../lib/credentials';
 import type { AgentsStatus } from '../lib/agents';
 import {
@@ -60,7 +60,20 @@ const error = ref('');
 const askingForTokens = ref(false);
 /** Whether the dialog opened because a run could not start, or because somebody asked for it. */
 const blockingCredentials = ref(false);
-const credentials = ref<CredentialStatus>({ gh: 'none', jira: false, unreadable: false });
+const credentials = ref<CredentialStatus>({ gh: false, jira: false, unreadable: false });
+
+/**
+ * Only the `admin` user may change the credentials.
+ *
+ * Asked once, of Rancher, and false until it answers - a gate that defaults open is not a gate.
+ * It hides the dialog; it does not hide the Secret, which any cluster owner can read through the
+ * API whatever this page draws. See lib/credentials.ts.
+ */
+const isAdmin = ref(false);
+
+isAdminUser().then((yes) => {
+  isAdmin.value = yes;
+}).catch(() => undefined);
 const starting = ref(false);
 const stopping = ref(false);
 const phase = ref<RunPhase>('starting');
@@ -304,7 +317,7 @@ onMounted(async() => {
   agents.value = await agentsStatus();
 
   await refresh();
-  credentials.value = await readCredentialStatus(principalId.value).catch(() => credentials.value);
+  credentials.value = await readCredentialStatus().catch(() => credentials.value);
   loading.value = false;
 
   window.addEventListener('keydown', onKeydown);
@@ -338,7 +351,7 @@ async function openGenerate() {
     return;
   }
 
-  credentials.value = await readCredentialStatus(principalId.value).catch(() => credentials.value);
+  credentials.value = await readCredentialStatus().catch(() => credentials.value);
 
   if (haveCredentials.value) {
     await generate();
@@ -353,12 +366,12 @@ async function openGenerate() {
 function manageCredentials() {
   blockingCredentials.value = false;
   askingForTokens.value = true;
-  readCredentialStatus(principalId.value).then((status) => (credentials.value = status)).catch(() => undefined);
+  readCredentialStatus().then((status) => (credentials.value = status)).catch(() => undefined);
 }
 
 /** After the dialog saved: pick up the new state, and carry on if it was in the way of a run. */
 async function credentialsSaved() {
-  credentials.value = await readCredentialStatus(principalId.value).catch(() => credentials.value);
+  credentials.value = await readCredentialStatus().catch(() => credentials.value);
 
   if (!blockingCredentials.value) {
     askingForTokens.value = false;
@@ -527,7 +540,13 @@ function open(meta: ReportMeta) {
           <i class="icon icon-close" />
           <span>{{ stopping ? 'Stopping…' : 'Stop' }}</span>
         </button>
+        <!--
+          Only the `admin` user sets the credentials, so only they are shown the way in. Hidden
+          rather than disabled: a disabled button invites everyone else to ask why, and the
+          answer - "somebody else manages this" - is better said by its absence.
+        -->
         <button
+          v-if="isAdmin"
           type="button"
           class="btn role-secondary"
           data-testid="idr-credentials-open"
@@ -679,7 +698,6 @@ function open(meta: ReportMeta) {
     <CredentialsDialog
       v-if="askingForTokens"
       :status="credentials"
-      :principal-id="principalId"
       :blocking="blockingCredentials"
       :busy="starting"
       @cancel="askingForTokens = false"

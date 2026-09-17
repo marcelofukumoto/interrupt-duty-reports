@@ -22,7 +22,7 @@ import { agentProject, agentsApi } from './agents';
 import { podExec, podRunScript, podWriteFile, shellQuote } from './exec';
 import type { PodRef } from './exec';
 import { createRunning, setStatus, updateMeta } from './store';
-import { userSlug } from './credentials';
+import { } from './credentials';
 import { SEED_FILES } from '../seed.generated';
 import type { ReportMeta } from '../types';
 
@@ -71,7 +71,7 @@ function idAndDate(now: Date): { id: string; date: string } {
  * from there - so this text, which ends up in a transcript and on a terminal somebody may be
  * watching, has nothing in it worth hiding.
  */
-function openingPrompt(runDir: string, id: string, date: string, slug: string): string {
+function openingPrompt(runDir: string, id: string, date: string): string {
   return [
     `Generate the Rancher UI interrupt-duty daily report for ${ date }.`,
     '',
@@ -79,7 +79,7 @@ function openingPrompt(runDir: string, id: string, date: string, slug: string): 
     '',
     'Do these four steps in order, without stopping to ask anything:',
     '',
-    `1. Gather the data:  sh ${ ROOT }/run.sh ${ runDir } ${ slug }`,
+    `1. Gather the data:  sh ${ ROOT }/run.sh ${ runDir }`,
     `   It writes ${ runDir }/data.json. It already has the credentials it needs - do not look`,
     '   for them, do not ask for them, and do not print them.',
     '',
@@ -183,7 +183,7 @@ export async function startRun(principalId: string, startedBy?: string): Promise
     const session = await api.agent.startInProject(
       agentProject(id),
       `Daily report ${ date }`,
-      openingPrompt(runDir, id, date, userSlug(principalId)),
+      openingPrompt(runDir, id, date),
     );
 
     // After the conversation exists, not before. meta.json travels with the run so that

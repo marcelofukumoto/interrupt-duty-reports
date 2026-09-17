@@ -16,12 +16,13 @@ set -e
 DIR=${1:?run.sh needs the run directory}
 # Whose credentials. They are stored per Rancher user, so a report is generated with the access
 # of the person who asked for it rather than with one shared account nobody can identify.
-USER_SLUG=${2:?run.sh needs the user slug}
 SEED=$(dirname "$0")
 
 [ -d "$DIR" ] || { echo "run.sh: no such run directory: $DIR" >&2; exit 2; }
 
 NS=interrupt-duty-reports-console
+# Settings are shared by every console in this family, not kept beside each one's own data.
+SECRET_NS=ui-internal-tools
 SECRET=settings
 
 # kubectl as the pod rather than as whoever opened a terminal in it. shell.sh writes a kubeconfig
@@ -34,8 +35,8 @@ secret_key() {
     | tr -d '\r\n'
 }
 
-GH_TOKEN=$(secret_key "$NS" "$SECRET" "gh_token-$USER_SLUG")
-JIRA_PAT=$(secret_key "$NS" "$SECRET" "jira_pat-$USER_SLUG")
+GH_TOKEN=$(secret_key "$SECRET_NS" "$SECRET" "gh_token")
+JIRA_PAT=$(secret_key "$SECRET_NS" "$SECRET" "jira_pat")
 
 missing=''
 [ -n "$JIRA_PAT" ] || missing="a Jira token"

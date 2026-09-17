@@ -17,7 +17,6 @@ import type { CredentialStatus } from '../lib/credentials';
 const props = defineProps<{
   status: CredentialStatus;
   /** Whose credentials these are. Stored per person, so this is about yours and nobody else's. */
-  principalId: string;
   /** True when this opened because a run could not start without them. */
   blocking?: boolean;
   busy?: boolean;
@@ -49,7 +48,7 @@ async function save() {
   error.value = '';
 
   try {
-    await saveCredentials(props.principalId, {
+    await saveCredentials({
       ...(github.value.trim() ? { ghToken: github.value.trim() } : {}),
       ...(jira.value.trim() ? { jiraPat: jira.value.trim() } : {}),
     });
@@ -68,7 +67,7 @@ async function clear(which: 'gh' | 'jira') {
   error.value = '';
 
   try {
-    await saveCredentials(props.principalId, which === 'gh' ? { ghToken: '' } : { jiraPat: '' });
+    await saveCredentials(which === 'gh' ? { ghToken: '' } : { jiraPat: '' });
     emit('saved');
   } catch (e: any) {
     error.value = e?.message || String(e);
