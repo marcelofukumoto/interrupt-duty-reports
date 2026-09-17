@@ -325,3 +325,12 @@ for (const [n, it] of items.entries()) {
 fs.writeFileSync(`${ workDir }/../contributions.json`, JSON.stringify(out, null, 1));
 process.stderr.write(`issue-round: wrote contributions.json (${ Object.values(out).filter((x) => x.ok).length }/${ items.length } answered)\n`);
 ' "$WORK" "$AGENT"
+
+# Ending the agents whose items are finished with.
+#
+# After the round rather than before it: an item that is in today's report is not a candidate,
+# and one that has just been asked should not be ended a moment later. Guarded, because
+# pruning is housekeeping - a report that cannot tidy up is still a report.
+if [ -f "$ROOT/issue-prune.mjs" ]; then
+  node "$ROOT/issue-prune.mjs" "$DIR" || echo "issue-round: pruning did not finish; nothing was ended" >&2
+fi
