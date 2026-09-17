@@ -12,17 +12,40 @@ entries:
       catalog.cattle.io/ui-component: plugins
       catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 5.0.0'
     apiVersion: v2
-    appVersion: 0.16.0
-    created: "2026-09-17T21:22:27.958603525Z"
+    appVersion: 0.16.1
+    created: "2026-09-17T21:25:57.977675568Z"
     description: The Rancher UI team's daily interrupt-duty report, generated in-cluster
       by the Agents extension and kept as ConfigMaps
-    digest: 4885da58e855fc36f94bd7ad8f06985822eab46416861cc55fa208a919458acd
+    digest: 4abcd10fa21b7b5906c6ed7a1908b7ef1610dbe4076028dfb100ad3c867c1236
     home: https://github.com/marcelofukumoto/interrupt-duty-reports-console
     icon: https://marcelofukumoto.github.io/interrupt-duty-reports-console/icon.svg
     name: interrupt-duty-reports-console
     type: application
     urls:
-    - assets/interrupt-duty-reports-console/interrupt-duty-reports-console-0.16.0.tgz
+    - assets/interrupt-duty-reports-console/interrupt-duty-reports-console-0.16.1.tgz
+    version: 0.16.1
+  - annotations:
+      catalog.cattle.io/certified: rancher
+      catalog.cattle.io/display-name: Interrupt Duty Reports
+      catalog.cattle.io/namespace: cattle-ui-plugin-system
+      catalog.cattle.io/os: linux
+      catalog.cattle.io/permits-os: linux, windows
+      catalog.cattle.io/rancher-version: '>= 2.10.0'
+      catalog.cattle.io/scope: management
+      catalog.cattle.io/ui-component: plugins
+      catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 5.0.0'
+    apiVersion: v2
+    appVersion: 0.16.0
+    created: "2026-09-17T21:22:50.46967854Z"
+    description: The Rancher UI team's daily interrupt-duty report, generated in-cluster
+      by the Agents extension and kept as ConfigMaps
+    digest: cb7d68936b98fae1c4011438d6c4aea2b01332e33ea907992193cd4649eb2440
+    home: https://github.com/marcelofukumoto/interrupt-duty-reports-console
+    icon: https://marcelofukumoto.github.io/interrupt-duty-reports-console/icon.svg
+    name: interrupt-duty-reports-console
+    type: application
+    urls:
+    - https://github.com/marcelofukumoto/interrupt-duty-reports-console/releases/download/interrupt-duty-reports-console-0.16.0/interrupt-duty-reports-console-0.16.0.tgz
     version: 0.16.0
   - annotations:
       catalog.cattle.io/certified: rancher
@@ -277,4 +300,4 @@ entries:
     urls:
     - https://github.com/marcelofukumoto/interrupt-duty-reports-console/releases/download/interrupt-duty-reports-console-0.10.0/interrupt-duty-reports-console-0.10.0.tgz
     version: 0.10.0
-generated: "2026-09-17T21:22:27.958176394Z"
+generated: "2026-09-17T21:25:57.977102316Z"
