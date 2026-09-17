@@ -69,7 +69,15 @@ export async function issueBusy(target: PodRef, key: string): Promise<boolean> {
 export async function tellIssueAgent(target: PodRef, key: string, note: string): Promise<string> {
   await ensureSeed(target);
 
-  const file = `/tmp/idr-note-${ Date.now() }.txt`;
+  // Beside the seed, not in /tmp.
+  //
+  // /tmp is the container overlay and /workspace is a hostPath, and they do not enforce the
+  // same way: this pod runs root WITHOUT CAP_DAC_OVERRIDE, so on the overlay a file chowned to
+  // node and chmodded 600 cannot then be written by the root shell that just created it -
+  // "cannot create ... Permission denied", on a file it owns a second earlier. The identical
+  // sequence under /workspace succeeds. Writing where everything else already writes avoids
+  // the whole question, and puts the note where the agent it is for lives.
+  const file = `${ ROOT }/note-${ Date.now() }.txt`;
   const framed = [
     `A message about ${ key } from the person reading today's interrupt-duty report.`,
     '',
@@ -82,7 +90,7 @@ export async function tellIssueAgent(target: PodRef, key: string, note: string):
     'will do differently. Do not write JSON for this one - just reply.',
   ].join('\n');
 
-  await podWriteFile(target, file, framed, { mode: '600', owner: 'node' });
+  await podWriteFile(target, file, framed, { mode: '644', owner: '1000:1000' });
 
   const result = await podExec(
     target,
