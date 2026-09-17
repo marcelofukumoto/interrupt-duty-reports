@@ -81,6 +81,20 @@ ownership), **not** `NEEDS GH ISSUE`. Say which gate is missing (e.g. "still `ne
 and the last note points at Terraform — confirm it's a UI bug and reproduce before opening a
 public issue"). `NEEDS GH ISSUE` is earned *after* triage, not in place of it.
 
+## Length: say it once, and stop
+
+**This is the rule most easily lost here.** Until now one agent wrote every item in the report
+in a single sitting, and was brief because it had eight others to get through. You have one
+item and a whole context to yourself, so that pressure is gone and nothing stops you writing
+an essay — except that the engineer reads twenty of these before their first coffee.
+
+- `next_step.explanation`: **one to three sentences.** Not four.
+- `suggested_comment`: **short** — the length of a message somebody would actually paste into
+  a ticket. A few sentences. If it has grown into paragraphs, it is a plan, not a comment.
+- `changed`: **one line.**
+
+Being thorough in your own head is the point of you. Spending it on the reader is not.
+
 ## The next step
 
 `next_step.verb` is exactly one of: `TRIAGE`, `NEEDS GH ISSUE`, `TRACK ISSUE`, `TRACK PR`,
@@ -91,8 +105,10 @@ markdown links — the URLs are already their own fields.
 
 ## The suggested comment
 
-Always write one for a Jira ticket, as the interrupt duty engineer. Plain text, no markdown, no
-surrounding quotes, no "here is a draft" preamble — it is copied straight into the ticket.
+Always write one for a Jira ticket, as the interrupt duty engineer: **a short**,
+copy-pasteable draft. Plain text, no markdown, no surrounding quotes, no "here is a draft"
+preamble — it is copied straight into the ticket, so it has to read like something a person
+typed, not like a briefing.
 
 - **TRIAGE** is an acknowledgement that we are picking it up, not a list of questions (use
   `NEEDS INFO` for questions). Template: *"Thank you for the bug report, we've moved this to In
